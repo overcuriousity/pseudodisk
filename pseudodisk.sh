@@ -496,7 +496,7 @@ get_preset_or_custom() {
             PARTITION_SCHEME="msdos"
             PARTITION_COUNT=1
             print_info "Preset: MS-DOS (MBR)"
-            print_note "Single FAT12 partition (max 16MB)"
+            print_note "Single FAT12 partition"
             if [ "$DISK_SIZE_MB" -gt 16 ]; then
                 print_warning "MS-DOS typically uses FAT12 which is limited to 16MB"
                 print_info "Consider reducing disk size or the partition will use FAT16"
@@ -707,7 +707,7 @@ get_partition_count() {
 get_partition_configs() {
     PARTITION_CONFIGS=()
     local total_allocated=0
-    local available_space=$((DISK_SIZE_MB - 2))  # Reserve 2MB for partition table
+    local available_space=$((DISK_SIZE_MB - PARTITION_TABLE_RESERVED_MB))  # Reserve for partition table / metadata
     
     for i in $(seq 1 $PARTITION_COUNT); do
         echo ""
@@ -1012,8 +1012,14 @@ create_disk_image() {
 setup_loop_device() {
     print_info "Setting up loop device..."
 
-    # Use atomic operation (find + attach in one command)
-    LOOP_DEVICE=$(losetup -f --show "$FILENAME" 2>/dev/null || true)
+    # Try to attach the image and ask the kernel to create partition devices (-P) when supported.
+    # Fall back to a plain attach if -P is not available.
+    LOOP_DEVICE=$(losetup -f --show -P "$FILENAME" 2>/dev/null || true)
+
+    if [ -z "$LOOP_DEVICE" ]; then
+        # older losetup may not support -P; attach without it then trigger partprobe later
+        LOOP_DEVICE=$(losetup -f --show "$FILENAME" 2>/dev/null || true)
+    fi
 
     if [ -z "$LOOP_DEVICE" ]; then
         print_error "Failed to create loop device"
@@ -1027,64 +1033,252 @@ setup_loop_device() {
 # Create partition table and partitions
 create_partitions() {
     print_info "Creating $PARTITION_SCHEME partition table..."
-    
+
     parted -s "$LOOP_DEVICE" mklabel "$PARTITION_SCHEME"
-    
-    local start_mb=1
-    local part_num=1
-    
+
+    # Reserve a small margin at the end of the disk to avoid creating partitions that
+    # extend into GPT backup header / metadata. This mirrors the -2MB reserve used
+    # interactively elsewhere in the script.
+    local PARTITION_TABLE_RESERVED_MB=2
+    if [ "$DISK_SIZE_MB" -le $PARTITION_TABLE_RESERVED_MB ]; then
+        print_error "Disk size (${DISK_SIZE_MB}MB) too small to reserve required metadata space"
+        cleanup
+        exit 1
+    fi
+
+    local usable_mb=$((DISK_SIZE_MB - PARTITION_TABLE_RESERVED_MB))
+
+    # Parse PARTITION_CONFIGS into arrays for easier processing
+    local fs size label
+    local -a fs_arr size_arr label_arr
     for config in "${PARTITION_CONFIGS[@]}"; do
         IFS='|' read -r fs size label <<< "$config"
-        
-        if [ "$size" = "remaining" ]; then
-            end="100%"
+        fs_arr+=("$fs")
+        size_arr+=("$size")
+        label_arr+=("$label")
+    done
+
+    local count=${#fs_arr[@]}
+    if [ "$count" -eq 0 ]; then
+        print_info "No partition configurations provided"
+        return
+    fi
+
+    # Convert sizes: numeric values stay numeric; 'remaining' will be resolved below
+    local -a numeric_size
+    local total_fixed=0
+    local -a remaining_idxs
+    for i in $(seq 0 $((count - 1))); do
+        s="${size_arr[$i]}"
+        if [ "$s" = "remaining" ]; then
+            numeric_size[$i]=-1
+            remaining_idxs+=("$i")
         else
-            end=$(echo "$start_mb + $size" | bc)
-            end="${end}MiB"
+            # sanitize numeric sizes (should be integer MB)
+            if ! [[ "$s" =~ ^[0-9]+$ ]]; then
+                print_error "Invalid partition size for entry $((i+1)): '$s'"
+                cleanup
+                exit 1
+            fi
+            numeric_size[$i]=$s
+            total_fixed=$((total_fixed + s))
         fi
-        
+    done
+
+    # Distribute remaining space among 'remaining' entries using the usable space
+    if [ "${#remaining_idxs[@]}" -gt 0 ]; then
+        local free_space=$((usable_mb - total_fixed))
+        if [ "$free_space" -le 0 ]; then
+            print_error "Not enough space to satisfy 'remaining' partitions (free: ${free_space}MB)"
+            cleanup
+            exit 1
+        fi
+
+        local rem_count=${#remaining_idxs[@]}
+        local base=$((free_space / rem_count))
+        local leftover=$((free_space - base * rem_count))
+
+        for idx in "${remaining_idxs[@]}"; do
+            numeric_size[$idx]=$base
+            if [ "$leftover" -gt 0 ]; then
+                numeric_size[$idx]=$((numeric_size[$idx] + 1))
+                leftover=$((leftover - 1))
+            fi
+        done
+    fi
+
+    # Find last index that will actually produce a partition entry (skip 'unallocated')
+    local last_mkpart_idx=-1
+    for i in $(seq 0 $((count - 1))); do
+        if [ "${fs_arr[$i]}" != "unallocated" ]; then
+            last_mkpart_idx=$i
+        fi
+    done
+
+    # If everything is unallocated, nothing to do
+    if [ "$last_mkpart_idx" -eq -1 ]; then
+        print_info "All configured space is unallocated - no partition entries will be created"
+        return
+    fi
+
+    # Compute how much explicit unallocated space is trailing after the last mkpart so we can reserve it
+    local trailing_unalloc_sum=0
+    for i in $(seq $((last_mkpart_idx + 1)) $((count - 1))); do
+        if [ "$i" -ge 0 ] && [ "${fs_arr[$i]}" = "unallocated" ]; then
+            trailing_unalloc_sum=$((trailing_unalloc_sum + numeric_size[$i]))
+        fi
+    done
+
+    # Sanity checks: ensure no numeric sizes are negative and the requested layout fits within usable space
+    local sum_all=0
+    for i in $(seq 0 $((count - 1))); do
+        if [ -z "${numeric_size[$i]}" ] || [ "${numeric_size[$i]}" -lt 0 ]; then
+            print_error "Internal error: unresolved partition size for entry $((i+1))"
+            cleanup
+            exit 1
+        fi
+        sum_all=$((sum_all + numeric_size[$i]))
+    done
+
+    if [ "$sum_all" -gt "$usable_mb" ]; then
+        print_error "Configured partitions (${sum_all}MB) exceed usable disk space (${usable_mb}MB) (reserved ${PARTITION_TABLE_RESERVED_MB}MB for metadata)"
+        cleanup
+        exit 1
+    fi
+
+    # Create partitions. We'll iterate in forward order, but the last mkpart will be explicitly ended
+    # before any trailing unallocated space so that 'unallocated' regions remain as requested.
+    local start_mb=1
+    local part_num=1
+
+    # Attempt to create a partition, retrying with shrinking end boundary when parted
+    # complains the end is outside the device (handles alignment/metadata rounding)
+    try_mkpart() {
+        local loopdev="$1"
+        local start_mb="$2"
+        local end_mb="$3"   # numeric MB
+        local fstype="$4"   # optional parted fs type (e.g. ntfs, ext4)
+
+        local max_attempts=8
+        local attempt_end=$end_mb
+        local output ret last_output
+
+        for ((try=0; try<max_attempts; try++)); do
+            local end_str="${attempt_end}MiB"
+
+            if [ -n "$fstype" ]; then
+                output=$(parted -s "$loopdev" mkpart primary "$fstype" "${start_mb}MiB" "$end_str" 2>&1)
+                ret=$?
+            else
+                output=$(parted -s "$loopdev" mkpart primary "${start_mb}MiB" "$end_str" 2>&1)
+                ret=$?
+            fi
+
+            if [ $ret -eq 0 ]; then
+                return 0
+            fi
+
+            last_output="$output"
+
+            # If the error looks like 'outside device' / 'not enough space' try shrinking the end
+            if echo "$output" | grep -Ei 'outside|out of range|not enough space|beyond|außerhalb|außer' >/dev/null 2>&1; then
+                print_warning "parted failed to create partition with end ${end_str} - retrying with ${attempt_end-1}MiB: $output"
+                attempt_end=$((attempt_end - 1))
+
+                if [ "$attempt_end" -le "$start_mb" ]; then
+                    print_error "Cannot allocate partition: insufficient space after retries"
+                    echo "$last_output"
+                    cleanup
+                    exit 1
+                fi
+
+                continue
+            else
+                print_error "parted failed creating partition: $output"
+                cleanup
+                exit 1
+            fi
+        done
+
+        print_error "Failed to create partition after ${max_attempts} retries: $last_output"
+        cleanup
+        exit 1
+    }
+
+    for i in $(seq 0 $((count - 1))); do
+        fs="${fs_arr[$i]}"
+        size_mb=${numeric_size[$i]}
+        label="${label_arr[$i]}"
+
+        if [ "$fs" = "unallocated" ]; then
+            print_info "Leaving ${size_mb}MB unallocated (no partition entry)"
+            start_mb=$((start_mb + size_mb))
+            continue
+        fi
+
+        # determine end for this partition
+        if [ "$i" -eq "$last_mkpart_idx" ]; then
+            # Make sure last mkpart ends before any trailing unallocated space and within usable area
+            end_mb=$((usable_mb - trailing_unalloc_sum))
+            if [ "$start_mb" -ge "$end_mb" ]; then
+                print_error "Not enough space to create partition $((i+1)): needed ${size_mb}MB, available $((end_mb - start_mb))MB"
+                cleanup
+                exit 1
+            fi
+            end="${end_mb}MiB"
+            numeric_end_mb=$end_mb
+        else
+            end_val=$((start_mb + size_mb))
+            # ensure we don't exceed usable area (should be caught by earlier checks)
+            if [ "$end_val" -gt "$usable_mb" ]; then
+                print_error "Partition $((i+1)) would exceed usable disk area (end ${end_val}MB > usable ${usable_mb}MB)"
+                cleanup
+                exit 1
+            fi
+            end="${end_val}MiB"
+            numeric_end_mb=$end_val
+        fi
+
         print_info "Creating partition $part_num: ${start_mb}MiB -> $end"
-        
-        # Set partition type based on filesystem
+
         case $fs in
             swap)
-                parted -s "$LOOP_DEVICE" mkpart primary linux-swap "${start_mb}MiB" "$end"
+                try_mkpart "$LOOP_DEVICE" "$start_mb" "$numeric_end_mb" linux-swap
                 ;;
             fat12|fat16|vfat)
-                parted -s "$LOOP_DEVICE" mkpart primary fat32 "${start_mb}MiB" "$end"
+                try_mkpart "$LOOP_DEVICE" "$start_mb" "$numeric_end_mb" fat32
                 ;;
             ntfs)
-                parted -s "$LOOP_DEVICE" mkpart primary ntfs "${start_mb}MiB" "$end"
+                try_mkpart "$LOOP_DEVICE" "$start_mb" "$numeric_end_mb" ntfs
                 ;;
             ext2|ext3|ext4)
-                parted -s "$LOOP_DEVICE" mkpart primary ext4 "${start_mb}MiB" "$end"
+                try_mkpart "$LOOP_DEVICE" "$start_mb" "$numeric_end_mb" ext4
                 ;;
             xfs)
-                parted -s "$LOOP_DEVICE" mkpart primary xfs "${start_mb}MiB" "$end"
+                try_mkpart "$LOOP_DEVICE" "$start_mb" "$numeric_end_mb" xfs
                 ;;
             hfsplus)
-                parted -s "$LOOP_DEVICE" mkpart primary hfs+ "${start_mb}MiB" "$end"
-                ;;
-            unallocated)
-                # Don't create a partition for unallocated space - just leave it empty
-                print_info "Leaving space unallocated (no partition entry)"
+                try_mkpart "$LOOP_DEVICE" "$start_mb" "$numeric_end_mb" hfs+
                 ;;
             *)
-                parted -s "$LOOP_DEVICE" mkpart primary "${start_mb}MiB" "$end"
+                try_mkpart "$LOOP_DEVICE" "$start_mb" "$numeric_end_mb" ""
                 ;;
         esac
-        
-        if [ "$size" != "remaining" ]; then
-            start_mb=$(echo "$start_mb + $size" | bc)
+
+        # advance start pointer for next partition (skip this for the explicitly-ended last mkpart)
+        if [ "$i" -ne "$last_mkpart_idx" ]; then
+            start_mb=$((start_mb + size_mb))
+        else
+            start_mb=$((end_mb))
         fi
-        
+
         part_num=$((part_num + 1))
     done
-    
-    # Inform kernel about partition table changes
+
+    # Inform kernel about partition table changes and give it a moment to create /dev nodes
     partprobe "$LOOP_DEVICE" 2>/dev/null || true
     sleep 2
-    
+
     print_success "Partitions created"
 }
 
