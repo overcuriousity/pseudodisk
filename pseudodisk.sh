@@ -44,13 +44,64 @@ check_dependencies() {
     command -v dd >/dev/null 2>&1 || missing_tools+=("coreutils")
     command -v losetup >/dev/null 2>&1 || missing_tools+=("util-linux")
     command -v parted >/dev/null 2>&1 || missing_tools+=("parted")
-    command -v mkfs.ext4 >/dev/null 2>&1 || missing_tools+=("e2fsprogs")
+    command -v bc >/dev/null 2>&1 || missing_tools+=("bc")
     
     if [ ${#missing_tools[@]} -gt 0 ]; then
         print_error "Missing required packages: ${missing_tools[*]}"
         print_info "Install with: sudo apt-get install ${missing_tools[*]}"
         exit 1
     fi
+}
+
+# Check filesystem tool availability
+check_filesystem_tools() {
+    echo ""
+    echo "Checking filesystem tool availability..."
+    echo ""
+    
+    # NTFS
+    if command -v mkfs.ntfs >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✓${NC} NTFS    (mkfs.ntfs available)"
+    else
+        echo -e "  ${YELLOW}✗${NC} NTFS    (install: sudo apt-get install ntfs-3g)"
+    fi
+    
+    # FAT32
+    if command -v mkfs.vfat >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✓${NC} FAT32   (mkfs.vfat available)"
+    else
+        echo -e "  ${YELLOW}✗${NC} FAT32   (install: sudo apt-get install dosfstools)"
+    fi
+    
+    # exFAT
+    if command -v mkfs.exfat >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✓${NC} exFAT   (mkfs.exfat available)"
+    else
+        echo -e "  ${YELLOW}✗${NC} exFAT   (install: sudo apt-get install exfat-fuse exfat-utils)"
+    fi
+    
+    # ext2/3/4
+    if command -v mkfs.ext4 >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✓${NC} ext2/3/4 (mkfs.ext4 available)"
+    else
+        echo -e "  ${YELLOW}✗${NC} ext2/3/4 (install: sudo apt-get install e2fsprogs)"
+    fi
+    
+    # XFS
+    if command -v mkfs.xfs >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✓${NC} XFS     (mkfs.xfs available)"
+    else
+        echo -e "  ${YELLOW}✗${NC} XFS     (install: sudo apt-get install xfsprogs)"
+    fi
+    
+    # swap
+    if command -v mkswap >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✓${NC} swap    (mkswap available)"
+    else
+        echo -e "  ${YELLOW}✗${NC} swap    (should be in util-linux)"
+    fi
+    
+    echo ""
 }
 
 # Display banner
@@ -110,6 +161,29 @@ get_disk_size() {
     print_info "Selected disk size: ${DISK_SIZE_MB} MB"
 }
 
+# Get initialization method
+get_init_method() {
+    echo ""
+    echo "Initialization Method:"
+    echo "  1) /dev/zero   (Fast, zeros - forensically predictable)"
+    echo "  2) /dev/random (Slow, random data - more realistic)"
+    echo "  3) fallocate   (Fastest, sparse file)"
+    echo ""
+    read -p "Select initialization method [1-3]: " INIT_CHOICE
+    
+    case $INIT_CHOICE in
+        1) INIT_METHOD="zero" ;;
+        2) INIT_METHOD="random" ;;
+        3) INIT_METHOD="fallocate" ;;
+        *)
+            print_error "Invalid choice"
+            exit 1
+            ;;
+    esac
+    
+    print_info "Selected initialization method: $INIT_METHOD"
+}
+
 # Get partition scheme
 get_partition_scheme() {
     echo ""
@@ -131,74 +205,154 @@ get_partition_scheme() {
     print_info "Selected partition scheme: $PARTITION_SCHEME"
 }
 
-# Get filesystem type
-get_filesystem() {
+# Get number of partitions
+get_partition_count() {
     echo ""
-    echo "Filesystem Type:"
-    echo "  1) NTFS    (Windows default, requires ntfs-3g)"
-    echo "  2) FAT32   (Universal compatibility, 4GB file limit)"
-    echo "  3) exFAT   (Modern, large file support)"
-    echo "  4) ext4    (Linux default)"
-    echo "  5) ext3    (Older Linux)"
-    echo "  6) ext2    (Legacy Linux, no journaling)"
-    echo "  7) XFS     (High-performance Linux)"
-    echo ""
-    read -p "Select filesystem [1-7]: " FS_CHOICE
+    read -p "How many partitions? (1-4): " PARTITION_COUNT
     
-    case $FS_CHOICE in
-        1) 
-            FILESYSTEM="ntfs"
-            if ! command -v mkfs.ntfs >/dev/null 2>&1; then
-                print_error "mkfs.ntfs not found. Install with: sudo apt-get install ntfs-3g"
-                exit 1
-            fi
-            ;;
-        2) FILESYSTEM="vfat" ;;
-        3) 
-            FILESYSTEM="exfat"
-            if ! command -v mkfs.exfat >/dev/null 2>&1; then
-                print_error "mkfs.exfat not found. Install with: sudo apt-get install exfat-utils"
-                exit 1
-            fi
-            ;;
-        4) FILESYSTEM="ext4" ;;
-        5) FILESYSTEM="ext3" ;;
-        6) FILESYSTEM="ext2" ;;
-        7) 
-            FILESYSTEM="xfs"
-            if ! command -v mkfs.xfs >/dev/null 2>&1; then
-                print_error "mkfs.xfs not found. Install with: sudo apt-get install xfsprogs"
-                exit 1
-            fi
-            ;;
-        *)
-            print_error "Invalid choice"
-            exit 1
-            ;;
-    esac
+    if ! [[ "$PARTITION_COUNT" =~ ^[1-4]$ ]]; then
+        print_error "Invalid number. Must be between 1 and 4"
+        exit 1
+    fi
     
-    print_info "Selected filesystem: $FILESYSTEM"
+    print_info "Creating $PARTITION_COUNT partition(s)"
 }
 
-# Get volume label
-get_volume_label() {
-    echo ""
-    read -p "Enter volume label (default: FORENSIC): " VOLUME_LABEL
-    VOLUME_LABEL=${VOLUME_LABEL:-FORENSIC}
+# Get partition configurations
+get_partition_configs() {
+    PARTITION_CONFIGS=()
+    
+    for i in $(seq 1 $PARTITION_COUNT); do
+        echo ""
+        echo "=========================================="
+        echo "  Partition $i Configuration"
+        echo "=========================================="
+        
+        # Get filesystem
+        echo ""
+        echo "Filesystem Type:"
+        echo "  1) NTFS    (Windows default)"
+        echo "  2) FAT32   (Universal compatibility)"
+        echo "  3) exFAT   (Modern, large file support)"
+        echo "  4) ext4    (Linux default)"
+        echo "  5) ext3    (Older Linux)"
+        echo "  6) ext2    (Legacy Linux, no journaling)"
+        echo "  7) XFS     (High-performance Linux)"
+        echo "  8) swap    (Linux swap space)"
+        echo ""
+        read -p "Select filesystem for partition $i [1-8]: " FS_CHOICE
+        
+        case $FS_CHOICE in
+            1) 
+                PART_FS="ntfs"
+                if ! command -v mkfs.ntfs >/dev/null 2>&1; then
+                    print_error "mkfs.ntfs not found. Install: sudo apt-get install ntfs-3g"
+                    exit 1
+                fi
+                ;;
+            2) 
+                PART_FS="vfat"
+                if ! command -v mkfs.vfat >/dev/null 2>&1; then
+                    print_error "mkfs.vfat not found. Install: sudo apt-get install dosfstools"
+                    exit 1
+                fi
+                ;;
+            3) 
+                PART_FS="exfat"
+                if ! command -v mkfs.exfat >/dev/null 2>&1; then
+                    print_error "mkfs.exfat not found. Install: sudo apt-get install exfat-fuse exfat-utils"
+                    exit 1
+                fi
+                ;;
+            4) 
+                PART_FS="ext4"
+                if ! command -v mkfs.ext4 >/dev/null 2>&1; then
+                    print_error "mkfs.ext4 not found. Install: sudo apt-get install e2fsprogs"
+                    exit 1
+                fi
+                ;;
+            5) 
+                PART_FS="ext3"
+                if ! command -v mkfs.ext3 >/dev/null 2>&1; then
+                    print_error "mkfs.ext3 not found. Install: sudo apt-get install e2fsprogs"
+                    exit 1
+                fi
+                ;;
+            6) 
+                PART_FS="ext2"
+                if ! command -v mkfs.ext2 >/dev/null 2>&1; then
+                    print_error "mkfs.ext2 not found. Install: sudo apt-get install e2fsprogs"
+                    exit 1
+                fi
+                ;;
+            7) 
+                PART_FS="xfs"
+                if ! command -v mkfs.xfs >/dev/null 2>&1; then
+                    print_error "mkfs.xfs not found. Install: sudo apt-get install xfsprogs"
+                    exit 1
+                fi
+                ;;
+            8)
+                PART_FS="swap"
+                if ! command -v mkswap >/dev/null 2>&1; then
+                    print_error "mkswap not found. Install: sudo apt-get install util-linux"
+                    exit 1
+                fi
+                ;;
+            *)
+                print_error "Invalid choice"
+                exit 1
+                ;;
+        esac
+        
+        # Get size
+        if [ $i -lt $PARTITION_COUNT ]; then
+            read -p "Size for partition $i in MB: " PART_SIZE
+            if ! [[ "$PART_SIZE" =~ ^[0-9]+$ ]] || [ "$PART_SIZE" -lt 1 ]; then
+                print_error "Invalid size"
+                exit 1
+            fi
+        else
+            PART_SIZE="remaining"
+            print_info "Partition $i will use remaining space"
+        fi
+        
+        # Get label (skip for swap)
+        if [ "$PART_FS" != "swap" ]; then
+            read -p "Volume label for partition $i (default: PART$i): " PART_LABEL
+            PART_LABEL=${PART_LABEL:-PART$i}
+        else
+            PART_LABEL=""
+        fi
+        
+        PARTITION_CONFIGS+=("$PART_FS|$PART_SIZE|$PART_LABEL")
+        print_info "Partition $i: $PART_FS, ${PART_SIZE}MB, label='$PART_LABEL'"
+    done
 }
 
 # Create the disk image
 create_disk_image() {
-    print_info "Creating disk image file: $FILENAME (${DISK_SIZE_MB} MB)..."
+    print_info "Creating disk image file: $FILENAME (${DISK_SIZE_MB} MB) using $INIT_METHOD..."
     
-    # Use fallocate for faster creation if available
-    if command -v fallocate >/dev/null 2>&1; then
-        fallocate -l ${DISK_SIZE_MB}M "$FILENAME"
-    else
-        dd if=/dev/zero of="$FILENAME" bs=1M count=$DISK_SIZE_MB status=progress
-    fi
+    case $INIT_METHOD in
+        fallocate)
+            if command -v fallocate >/dev/null 2>&1; then
+                fallocate -l ${DISK_SIZE_MB}M "$FILENAME"
+            else
+                print_warning "fallocate not available, falling back to /dev/zero"
+                dd if=/dev/zero of="$FILENAME" bs=1M count=$DISK_SIZE_MB status=progress
+            fi
+            ;;
+        zero)
+            dd if=/dev/zero of="$FILENAME" bs=1M count=$DISK_SIZE_MB status=progress
+            ;;
+        random)
+            print_warning "Using /dev/urandom - this will be SLOW!"
+            dd if=/dev/urandom of="$FILENAME" bs=1M count=$DISK_SIZE_MB status=progress
+            ;;
+    esac
     
-    print_success "Disk image created"
+    print_success "Disk image created with $INIT_METHOD"
 }
 
 # Setup loop device
@@ -209,66 +363,93 @@ setup_loop_device() {
     print_success "Loop device created: $LOOP_DEVICE"
 }
 
-# Create partition table and partition
+# Create partition table and partitions
 create_partitions() {
     print_info "Creating $PARTITION_SCHEME partition table..."
     
     parted -s "$LOOP_DEVICE" mklabel "$PARTITION_SCHEME"
     
-    print_info "Creating partition..."
+    local start_mb=1
+    local part_num=1
     
-    if [ "$PARTITION_SCHEME" = "gpt" ]; then
-        # For GPT, leave 1MB at start and end for alignment
-        parted -s "$LOOP_DEVICE" mkpart primary 1MiB 100%
-    else
-        # For MBR
-        parted -s "$LOOP_DEVICE" mkpart primary 1MiB 100%
-    fi
+    for config in "${PARTITION_CONFIGS[@]}"; do
+        IFS='|' read -r fs size label <<< "$config"
+        
+        if [ "$size" = "remaining" ]; then
+            end="100%"
+        else
+            end="${start_mb}MiB + ${size}MiB"
+            end=$(echo "$start_mb + $size" | bc)
+            end="${end}MiB"
+        fi
+        
+        print_info "Creating partition $part_num: ${start_mb}MiB -> $end"
+        
+        if [ "$fs" = "swap" ]; then
+            parted -s "$LOOP_DEVICE" mkpart primary linux-swap "${start_mb}MiB" "$end"
+        else
+            parted -s "$LOOP_DEVICE" mkpart primary "${start_mb}MiB" "$end"
+        fi
+        
+        if [ "$size" != "remaining" ]; then
+            start_mb=$(echo "$start_mb + $size" | bc)
+        fi
+        
+        part_num=$((part_num + 1))
+    done
     
     # Inform kernel about partition table changes
     partprobe "$LOOP_DEVICE"
-    sleep 1
+    sleep 2
     
-    print_success "Partition created"
+    print_success "Partitions created"
 }
 
-# Format the partition
-format_partition() {
-    PARTITION="${LOOP_DEVICE}p1"
+# Format the partitions
+format_partitions() {
+    local part_num=1
     
-    # Check if partition device exists
-    if [ ! -e "$PARTITION" ]; then
-        print_warning "Partition device $PARTITION not found, trying alternative..."
-        PARTITION="${LOOP_DEVICE}1"
-    fi
-    
-    if [ ! -e "$PARTITION" ]; then
-        print_error "Cannot find partition device"
-        cleanup
-        exit 1
-    fi
-    
-    print_info "Formatting partition with $FILESYSTEM filesystem..."
-    
-    case $FILESYSTEM in
-        ntfs)
-            mkfs.ntfs -f -L "$VOLUME_LABEL" "$PARTITION"
-            ;;
-        vfat)
-            mkfs.vfat -n "$VOLUME_LABEL" "$PARTITION"
-            ;;
-        exfat)
-            mkfs.exfat -n "$VOLUME_LABEL" "$PARTITION"
-            ;;
-        ext2|ext3|ext4)
-            mkfs."$FILESYSTEM" -L "$VOLUME_LABEL" "$PARTITION"
-            ;;
-        xfs)
-            mkfs.xfs -f -L "$VOLUME_LABEL" "$PARTITION"
-            ;;
-    esac
-    
-    print_success "Filesystem created"
+    for config in "${PARTITION_CONFIGS[@]}"; do
+        IFS='|' read -r fs size label <<< "$config"
+        
+        # Determine partition device name
+        PARTITION="${LOOP_DEVICE}p${part_num}"
+        if [ ! -e "$PARTITION" ]; then
+            PARTITION="${LOOP_DEVICE}${part_num}"
+        fi
+        
+        if [ ! -e "$PARTITION" ]; then
+            print_error "Cannot find partition device for partition $part_num"
+            cleanup
+            exit 1
+        fi
+        
+        print_info "Formatting partition $part_num ($PARTITION) with $fs filesystem..."
+        
+        case $fs in
+            ntfs)
+                mkfs.ntfs -f -L "$label" "$PARTITION"
+                ;;
+            vfat)
+                mkfs.vfat -n "$label" "$PARTITION"
+                ;;
+            exfat)
+                mkfs.exfat -n "$label" "$PARTITION"
+                ;;
+            ext2|ext3|ext4)
+                mkfs."$fs" -L "$label" "$PARTITION"
+                ;;
+            xfs)
+                mkfs.xfs -f -L "$label" "$PARTITION"
+                ;;
+            swap)
+                mkswap -L "SWAP$part_num" "$PARTITION"
+                ;;
+        esac
+        
+        print_success "Partition $part_num formatted"
+        part_num=$((part_num + 1))
+    done
 }
 
 # Cleanup function
@@ -279,22 +460,41 @@ cleanup() {
     fi
 }
 
-# Mount the filesystem
-mount_filesystem() {
+# Mount filesystems
+mount_filesystems() {
     echo ""
-    read -p "Do you want to mount the filesystem now? (y/n): " MOUNT_NOW
+    read -p "Do you want to mount the filesystem(s) now? (y/n): " MOUNT_NOW
     
     if [ "$MOUNT_NOW" = "y" ]; then
-        MOUNT_POINT="/mnt/forensic_disk_$$"
-        mkdir -p "$MOUNT_POINT"
+        local part_num=1
+        MOUNT_POINTS=()
         
-        print_info "Mounting to $MOUNT_POINT..."
-        mount "$PARTITION" "$MOUNT_POINT"
-        
-        print_success "Filesystem mounted at: $MOUNT_POINT"
-        print_info "To unmount: sudo umount $MOUNT_POINT"
-        
-        MOUNTED=true
+        for config in "${PARTITION_CONFIGS[@]}"; do
+            IFS='|' read -r fs size label <<< "$config"
+            
+            # Skip swap partitions
+            if [ "$fs" = "swap" ]; then
+                print_info "Skipping mount for swap partition $part_num"
+                part_num=$((part_num + 1))
+                continue
+            fi
+            
+            PARTITION="${LOOP_DEVICE}p${part_num}"
+            if [ ! -e "$PARTITION" ]; then
+                PARTITION="${LOOP_DEVICE}${part_num}"
+            fi
+            
+            MOUNT_POINT="/mnt/forensic_p${part_num}_$$"
+            mkdir -p "$MOUNT_POINT"
+            
+            print_info "Mounting partition $part_num to $MOUNT_POINT..."
+            mount "$PARTITION" "$MOUNT_POINT"
+            
+            print_success "Partition $part_num mounted at: $MOUNT_POINT"
+            MOUNT_POINTS+=("$MOUNT_POINT")
+            
+            part_num=$((part_num + 1))
+        done
     fi
 }
 
@@ -307,14 +507,38 @@ show_summary() {
     echo ""
     echo "Image File:        $(realpath $FILENAME)"
     echo "Size:              ${DISK_SIZE_MB} MB"
+    echo "Init Method:       $INIT_METHOD"
     echo "Partition Scheme:  $PARTITION_SCHEME"
-    echo "Filesystem:        $FILESYSTEM"
-    echo "Volume Label:      $VOLUME_LABEL"
     echo "Loop Device:       $LOOP_DEVICE"
-    echo "Partition:         $PARTITION"
-    if [ "$MOUNTED" = true ]; then
-        echo "Mount Point:       $MOUNT_POINT"
+    echo ""
+    echo "Partitions:"
+    
+    local part_num=1
+    for config in "${PARTITION_CONFIGS[@]}"; do
+        IFS='|' read -r fs size label <<< "$config"
+        
+        PARTITION="${LOOP_DEVICE}p${part_num}"
+        if [ ! -e "$PARTITION" ]; then
+            PARTITION="${LOOP_DEVICE}${part_num}"
+        fi
+        
+        if [ "$fs" = "swap" ]; then
+            echo "  [$part_num] $PARTITION - $fs (${size}MB)"
+        else
+            echo "  [$part_num] $PARTITION - $fs (${size}MB) - '$label'"
+        fi
+        
+        part_num=$((part_num + 1))
+    done
+    
+    if [ ${#MOUNT_POINTS[@]} -gt 0 ]; then
+        echo ""
+        echo "Mount Points:"
+        for mp in "${MOUNT_POINTS[@]}"; do
+            echo "  $mp"
+        done
     fi
+    
     echo ""
     echo "=========================================="
     echo "  Forensic Analysis Commands"
@@ -327,23 +551,15 @@ show_summary() {
     echo "Hex editor analysis:"
     echo "  hexdump -C $FILENAME | less"
     echo "  xxd $FILENAME | less"
-    echo "  sudo apt-get install bless  # GUI hex editor"
-    echo "  bless $FILENAME"
-    echo ""
-    echo "Mount the image later:"
-    echo "  sudo losetup -f $FILENAME"
-    echo "  sudo losetup -l  # List loop devices"
-    echo "  sudo mount /dev/loopXp1 /mnt/mountpoint"
     echo ""
     echo "Analyze with forensic tools:"
-    echo "  sudo apt-get install sleuthkit"
-    echo "  mmls $FILENAME  # Show partition layout"
-    echo "  fsstat -o 2048 $FILENAME  # Filesystem details"
-    echo "  fls -o 2048 $FILENAME  # List files"
+    echo "  mmls $FILENAME"
     echo ""
     echo "Clean up (when done):"
-    if [ "$MOUNTED" = true ]; then
-        echo "  sudo umount $MOUNT_POINT"
+    if [ ${#MOUNT_POINTS[@]} -gt 0 ]; then
+        for mp in "${MOUNT_POINTS[@]}"; do
+            echo "  sudo umount $mp"
+        done
     fi
     echo "  sudo losetup -d $LOOP_DEVICE"
     echo ""
@@ -357,12 +573,14 @@ main() {
     show_banner
     check_root
     check_dependencies
+    check_filesystem_tools
     
     get_filename
     get_disk_size
+    get_init_method
     get_partition_scheme
-    get_filesystem
-    get_volume_label
+    get_partition_count
+    get_partition_configs
     
     echo ""
     echo "=========================================="
@@ -370,9 +588,20 @@ main() {
     echo "=========================================="
     echo "Filename:          $FILENAME"
     echo "Size:              ${DISK_SIZE_MB} MB"
+    echo "Init Method:       $INIT_METHOD"
     echo "Partition Scheme:  $PARTITION_SCHEME"
-    echo "Filesystem:        $FILESYSTEM"
-    echo "Volume Label:      $VOLUME_LABEL"
+    echo "Partitions:        $PARTITION_COUNT"
+    
+    for i in $(seq 1 $PARTITION_COUNT); do
+        config="${PARTITION_CONFIGS[$((i-1))]}"
+        IFS='|' read -r fs size label <<< "$config"
+        if [ "$fs" = "swap" ]; then
+            echo "  [$i] $fs (${size}MB)"
+        else
+            echo "  [$i] $fs (${size}MB) - '$label'"
+        fi
+    done
+    
     echo ""
     read -p "Proceed with creation? (y/n): " CONFIRM
     
@@ -384,8 +613,8 @@ main() {
     create_disk_image
     setup_loop_device
     create_partitions
-    format_partition
-    mount_filesystem
+    format_partitions
+    mount_filesystems
     
     show_summary
 }

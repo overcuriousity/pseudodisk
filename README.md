@@ -4,10 +4,13 @@ A comprehensive toolkit for creating disk images with various filesystems for fo
 
 ## Features
 
-- **Multiple Filesystem Support**: NTFS, FAT32, exFAT, ext2/3/4, XFS
+- **Multiple Filesystem Support**: NTFS, FAT32, exFAT, ext2/3/4, XFS, swap
+- **Multi-Partition Support**: Create up to 4 partitions in a single disk image
 - **Partition Schemes**: GPT (modern) and MBR (legacy)
+- **Initialization Methods**: Choose between /dev/zero (fast), /dev/urandom (realistic), or fallocate (sparse)
 - **Interactive Configuration**: User-friendly prompts for all parameters
 - **Automatic Loop Device Management**: Handles mounting and cleanup
+- **Filesystem Availability Check**: Verifies required tools before operation
 - **Forensic-Ready**: Pre-configured for hex editor and forensic tool analysis
 
 ## Prerequisites
@@ -20,7 +23,8 @@ sudo apt-get install -y \
     parted \
     util-linux \
     e2fsprogs \
-    dosfstools
+    dosfstools \
+    bc
 ```
 
 ### Optional (for specific filesystems)
@@ -39,6 +43,38 @@ sudo apt-get install xfsprogs
 sudo apt-get install sleuthkit
 ```
 
+## Initialization Methods
+
+The script offers three methods for creating the disk image file:
+
+1. **`/dev/zero`** (Recommended for most cases)
+   - Fast creation speed
+   - Fills image with zeros
+   - Forensically predictable and clean
+   - Creates realistic empty disk structure
+
+2. **`/dev/urandom`** (For realistic random data)
+   - Slow creation speed
+   - Fills image with random data
+   - More realistic for testing data recovery
+   - Useful for simulating previously used disks
+
+3. **`fallocate`** (Fastest)
+   - Very fast, creates sparse file
+   - Does not actually write data to disk initially
+   - Good for quick testing
+   - May not be suitable for all forensic scenarios
+
+## Multi-Partition Support
+
+Create complex disk layouts with up to 4 partitions:
+
+- Each partition can have a different filesystem
+- Mix operating system types (Windows NTFS + Linux ext4)
+- Include swap partitions for realistic Linux setups
+- The last partition automatically uses remaining space
+- Perfect for practicing partition table analysis
+
 ## Usage
 
 ### Creating a Disk Image
@@ -46,17 +82,22 @@ sudo apt-get install sleuthkit
 Run the main script with sudo:
 
 ```bash
-sudo ./create_forensic_disk.sh
+sudo ./pseudodisk.sh
 ```
 
-The script will interactively prompt you for:
-
-1. **Filename**: Output file name (default: forensic_disk.dd)
-2. **Size**: Choose from presets (100MB, 500MB, 1GB, 5GB) or custom
-3. **Partition Scheme**: GPT or MBR
-4. **Filesystem**: NTFS, FAT32, exFAT, ext2/3/4, XFS
-5. **Volume Label**: Custom label for the filesystem
-6. **Mount**: Option to mount immediately after creation
+The script will:
+1. Check filesystem tool availability
+2. Interactively prompt you for:
+   - **Filename**: Output file name (default: forensic_disk.dd)
+   - **Size**: Choose from presets (100MB, 500MB, 1GB, 5GB) or custom
+   - **Initialization Method**: /dev/zero, /dev/urandom, or fallocate
+   - **Partition Scheme**: GPT or MBR
+   - **Partition Count**: 1-4 partitions
+   - **Per-Partition Configuration**:
+     - Filesystem type (NTFS, FAT32, exFAT, ext2/3/4, XFS, swap)
+     - Size in MB (last partition uses remaining space)
+     - Volume label (except for swap)
+   - **Mount**: Option to mount filesystems immediately after creation
 
 ### Example Session
 
@@ -64,6 +105,15 @@ The script will interactively prompt you for:
 ==========================================
   Forensic Disk Image Creator
 ==========================================
+
+Checking filesystem tool availability...
+
+  ✓ NTFS    (mkfs.ntfs available)
+  ✓ FAT32   (mkfs.vfat available)
+  ✓ exFAT   (mkfs.exfat available)
+  ✓ ext2/3/4 (mkfs.ext4 available)
+  ✓ XFS     (mkfs.xfs available)
+  ✓ swap    (mkswap available)
 
 Enter output filename (default: forensic_disk.dd): ntfsdisk.dd
 
@@ -76,24 +126,60 @@ Disk Size Options:
 
 Select disk size [1-5]: 2
 
+Initialization Method:
+  1) /dev/zero   (Fast, zeros - forensically predictable)
+  2) /dev/random (Slow, random data - more realistic)
+  3) fallocate   (Fastest, sparse file)
+
+Select initialization method [1-3]: 1
+
 Partition Scheme:
   1) GPT (GUID Partition Table) - Modern, Windows 10/11 default
   2) MBR (Master Boot Record) - Legacy, compatible with older systems
 
 Select partition scheme [1-2]: 1
 
+How many partitions? (1-4): 2
+
+==========================================
+  Partition 1 Configuration
+==========================================
+
 Filesystem Type:
-  1) NTFS    (Windows default, requires ntfs-3g)
-  2) FAT32   (Universal compatibility, 4GB file limit)
+  1) NTFS    (Windows default)
+  2) FAT32   (Universal compatibility)
   3) exFAT   (Modern, large file support)
   4) ext4    (Linux default)
   5) ext3    (Older Linux)
   6) ext2    (Legacy Linux, no journaling)
   7) XFS     (High-performance Linux)
+  8) swap    (Linux swap space)
 
-Select filesystem [1-7]: 1
+Select filesystem for partition 1 [1-8]: 1
 
-Enter volume label (default: FORENSIC): EVIDENCE
+Size for partition 1 in MB: 400
+
+Volume label for partition 1 (default: PART1): EVIDENCE
+
+==========================================
+  Partition 2 Configuration
+==========================================
+
+Filesystem Type:
+  1) NTFS    (Windows default)
+  2) FAT32   (Universal compatibility)
+  3) exFAT   (Modern, large file support)
+  4) ext4    (Linux default)
+  5) ext3    (Older Linux)
+  6) ext2    (Legacy Linux, no journaling)
+  7) XFS     (High-performance Linux)
+  8) swap    (Linux swap space)
+
+Select filesystem for partition 2 [1-8]: 4
+
+[INFO] Partition 2 will use remaining space
+
+Volume label for partition 2 (default: PART2): DATA
 ```
 
 ### Cleaning Up
@@ -102,11 +188,11 @@ When finished with your analysis, use the cleanup script:
 
 ```bash
 # Clean up a specific disk image
-sudo ./cleanup_forensic_disk.sh
+sudo ./cleanup.sh
 # Enter filename when prompted
 
 # Or clean up all loop devices
-sudo ./cleanup_forensic_disk.sh
+sudo ./cleanup.sh
 # Type 'all' when prompted
 ```
 
