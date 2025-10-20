@@ -4,7 +4,7 @@ A comprehensive toolkit for creating disk images with various filesystems for fo
 
 ## Features
 
-- **Multiple Filesystem Support**: NTFS, FAT32, exFAT, ext2/3/4, XFS, swap
+- **Multiple Filesystem Support**: NTFS, FAT32, exFAT, ext2/3/4, XFS, HFS+, swap
 - **Preset Layouts**: Pre-configured layouts for Windows, Linux, and macOS systems
 - **Multi-Partition Support**: Create up to 4 partitions in a single disk image
 - **Partition Schemes**: GPT (modern) and MBR (legacy)
@@ -39,6 +39,9 @@ sudo apt-get install exfat-fuse exfat-utils
 
 # For XFS support
 sudo apt-get install xfsprogs
+
+# For HFS+ support
+sudo apt-get install hfsprogs
 ```
 
 ## Preset Layouts
@@ -61,8 +64,7 @@ Choose from pre-configured layouts that simulate real operating systems:
 - Minimal Linux (MBR, Single ext4)
 
 **macOS Presets:**
-- Modern macOS (GPT, EFI + APFS)
-- Legacy macOS (GPT, Single HFS+)
+- macOS (GPT, EFI + HFS+)
 
 **Custom Layout:**
 - Full manual configuration with 1-4 partitions
@@ -113,7 +115,7 @@ The script will:
      - Partition Scheme: GPT or MBR
      - Partition Count: 1-4 partitions
      - Per-Partition Configuration:
-       - Filesystem type (NTFS, FAT32, exFAT, ext2/3/4, XFS, swap, etc.)
+       - Filesystem type (NTFS, FAT32, exFAT, ext2/3/4, XFS, HFS+, swap, etc.)
        - Size in MB (last partition uses remaining space)
        - Volume label (except for swap)
    - **Mount**: Option to mount filesystems immediately after creation
@@ -137,7 +139,6 @@ Checking filesystem tool availability...
   ✓ ext4    (mkfs.ext4 available)
   ✓ XFS     (mkfs.xfs available)
   ✓ HFS+    (mkfs.hfsplus available)
-  ✓ APFS    (limited Linux support; creation typically requires macOS)
   ✓ swap    (mkswap available)
   ✓ Unallocated (no mkfs required)
 
@@ -182,13 +183,12 @@ Layout Presets:
     11) Minimal Linux (MBR, Single ext4)
 
   macOS Presets:
-    12) Modern macOS (GPT, EFI + APFS)
-    13) Legacy macOS (GPT, Single HFS+)
+    12) macOS (GPT, EFI + HFS+)
 
   Custom:
-    14) Custom layout (manual configuration)
+    13) Custom layout (manual configuration)
 
-Select layout [1-14]: 1
+Select layout [1-13]: 1
 
 [INFO] Preset: Windows 11/10 (GPT)
 [NOTE] EFI System Partition (260MB) + Main Windows (auto) + Recovery (500MB)
@@ -472,3 +472,13 @@ sudo lsof | grep /mnt/forensic
 # Force unmount (use with caution)
 sudo umount -l /mnt/forensic
 ```
+
+## Notes on Filesystem Support
+
+- **NTFS**: Full read/write support via ntfs-3g
+- **FAT12/16/32**: Full support on all Linux systems
+- **exFAT**: Requires exfatprogs or exfat-utils
+- **ext2/3/4**: Native Linux support
+- **XFS**: Native Linux support
+- **HFS+**: Limited support (often read-only on Linux)
+- **APFS**: Not supported on Linux (requires macOS)

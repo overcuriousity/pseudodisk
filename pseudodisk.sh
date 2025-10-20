@@ -2,7 +2,7 @@
 
 # Forensic Practice Disk Image Creator - Enhanced Version
 # Creates disk images with various filesystems for forensic analysis practice
-# Now with improved UX, sanity checks, and extended filesystem support
+# APFS support removed - not functional on Linux
 
 set -e
 set -o pipefail
@@ -62,7 +62,6 @@ FS_MIN_SIZE["ext3"]=1
 FS_MIN_SIZE["ext4"]=1
 FS_MIN_SIZE["xfs"]=16
 FS_MIN_SIZE["hfsplus"]=8
-FS_MIN_SIZE["apfs"]=1
 FS_MIN_SIZE["swap"]=1
 FS_MIN_SIZE["unallocated"]=1
 
@@ -77,7 +76,6 @@ FS_MAX_SIZE["ext3"]=16777216
 FS_MAX_SIZE["ext4"]=16777216
 FS_MAX_SIZE["xfs"]=16777216
 FS_MAX_SIZE["hfsplus"]=2097152  # 2TB
-FS_MAX_SIZE["apfs"]=16777216
 FS_MAX_SIZE["swap"]=128000  # 128GB practical max
 FS_MAX_SIZE["unallocated"]=16777216  # No real limit
 
@@ -122,7 +120,6 @@ check_filesystem_tools() {
         "ext4|mkfs.ext4 mke2fs|sudo apt-get install e2fsprogs"
         "XFS|mkfs.xfs|sudo apt-get install xfsprogs"
         "HFS+|mkfs.hfsplus newfs_hfs|sudo apt-get install hfsprogs"
-        "APFS|mkfs.apfs apfs-fuse|limited support — creation typically requires macOS or specialized tools"
         "swap|mkswap|should be present in util-linux"
         "Unallocated|:|no mkfs required"
     )
@@ -446,13 +443,12 @@ get_preset_or_custom() {
     echo "    11) Minimal Linux (MBR, Single ext4)"
     echo ""
     echo "  macOS Presets:"
-    echo "    12) Modern macOS (GPT, EFI + APFS)"
-    echo "    13) Legacy macOS (GPT, Single HFS+)"
+    echo "    12) macOS (GPT, EFI + HFS+)"
     echo ""
     echo "  Custom:"
-    echo "    14) Custom layout (manual configuration)"
+    echo "    13) Custom layout (manual configuration)"
     echo ""
-    read -p "Select layout [1-14]: " PRESET_CHOICE
+    read -p "Select layout [1-13]: " PRESET_CHOICE
     
     case $PRESET_CHOICE in
         1)  # Windows 11/10
@@ -536,23 +532,15 @@ get_preset_or_custom() {
             print_info "Preset: Minimal Linux (MBR)"
             print_note "Single ext4 partition"
             ;;
-        12) # Modern macOS
+        12) # macOS
             USE_PRESET=true
             PARTITION_SCHEME="gpt"
             PARTITION_COUNT=2
-            print_info "Preset: Modern macOS (GPT)"
-            print_note "EFI (200MB) + APFS (auto)"
-            print_warning "APFS support on Linux is very limited"
+            print_info "Preset: macOS (GPT)"
+            print_note "EFI (200MB) + HFS+ (auto)"
+            print_warning "HFS+ support on Linux is limited (read-only in most cases)"
             ;;
-        13) # Legacy macOS
-            USE_PRESET=true
-            PARTITION_SCHEME="gpt"
-            PARTITION_COUNT=1
-            print_info "Preset: Legacy macOS (GPT)"
-            print_note "Single HFS+ partition"
-            print_warning "HFS+ support on Linux is limited"
-            ;;
-        14) # Custom
+        13) # Custom
             USE_PRESET=false
             print_info "Custom layout selected"
             ;;
@@ -635,11 +623,8 @@ apply_preset() {
         11) # Minimal Linux
             PARTITION_CONFIGS+=("ext4|remaining|rootfs")
             ;;
-        12) # Modern macOS
+        12) # macOS
             PARTITION_CONFIGS+=("vfat|200|EFI")
-            PARTITION_CONFIGS+=("apfs|remaining|MacintoshHD")
-            ;;
-        13) # Legacy macOS
             PARTITION_CONFIGS+=("hfsplus|remaining|MacintoshHD")
             ;;
     esac
@@ -723,12 +708,11 @@ get_partition_configs() {
         echo "  7)  ext3    (Linux, journaling)"
         echo "  8)  ext4    (Linux default, modern)"
         echo "  9)  XFS     (High-performance Linux)"
-        echo "  10) HFS+    (macOS legacy)"
-        echo "  11) APFS    (macOS modern - limited Linux support)"
-        echo "  12) swap    (Linux swap space)"
-        echo "  13) unallocated (Empty space - for forensic practice)"
+        echo "  10) HFS+    (macOS - limited Linux support)"
+        echo "  11) swap    (Linux swap space)"
+        echo "  12) unallocated (Empty space - for forensic practice)"
         echo ""
-        read -p "Select filesystem for partition $i [1-13]: " FS_CHOICE
+        read -p "Select filesystem for partition $i [1-12]: " FS_CHOICE
         
         case $FS_CHOICE in
             1) 
@@ -814,18 +798,9 @@ get_partition_configs() {
                     get_partition_configs
                     return
                 fi
-                print_warning "HFS+ support on Linux is limited"
+                print_warning "HFS+ support on Linux is limited (typically read-only)"
                 ;;
             11)
-                PART_FS="apfs"
-                print_warning "APFS has very limited Linux support and may not work properly"
-                read -p "Continue anyway? (y/n): " continue
-                if [ "$continue" != "y" ]; then
-                    get_partition_configs
-                    return
-                fi
-                ;;
-            12)
                 PART_FS="swap"
                 if ! command -v mkswap >/dev/null 2>&1; then
                     print_error "mkswap not found. Install: sudo apt-get install util-linux"
@@ -833,7 +808,7 @@ get_partition_configs() {
                     return
                 fi
                 ;;
-            13)
+            12)
                 PART_FS="unallocated"
                 print_note "Unallocated space - useful for practicing partition recovery"
                 ;;
@@ -1028,10 +1003,10 @@ create_partitions() {
 
     parted -s "$LOOP_DEVICE" mklabel "$PARTITION_SCHEME"
 
-    # Reserve a small margin at the end of the disk to avoid creating partitions that
-    # extend into GPT backup header / metadata. This mirrors the -2MB reserve used
-    # interactively elsewhere in the script.
-    local PARTITION_TABLE_RESERVED_MB=2
+    # Reserve space for partition table metadata
+    # GPT needs ~1MB at start and ~1MB at end
+    # MBR needs less but we use same reserve for simplicity
+    local PARTITION_TABLE_RESERVED_MB=3
     if [ "$DISK_SIZE_MB" -le $PARTITION_TABLE_RESERVED_MB ]; then
         print_error "Disk size (${DISK_SIZE_MB}MB) too small to reserve required metadata space"
         cleanup
@@ -1138,64 +1113,10 @@ create_partitions() {
         exit 1
     fi
 
-    # Create partitions. We'll iterate in forward order, but the last mkpart will be explicitly ended
-    # before any trailing unallocated space so that 'unallocated' regions remain as requested.
+    # Create partitions with proper alignment
+    # Start at 1MiB for alignment
     local start_mb=1
     local part_num=1
-
-    # Attempt to create a partition, retrying with shrinking end boundary when parted
-    # complains the end is outside the device (handles alignment/metadata rounding)
-    try_mkpart() {
-        local loopdev="$1"
-        local start_mb="$2"
-        local end_mb="$3"   # numeric MB
-        local fstype="$4"   # optional parted fs type (e.g. ntfs, ext4)
-
-        local max_attempts=8
-        local attempt_end=$end_mb
-        local output ret last_output
-
-        for ((try=0; try<max_attempts; try++)); do
-            local end_str="${attempt_end}MiB"
-
-            if [ -n "$fstype" ]; then
-                output=$(parted -s "$loopdev" mkpart primary "$fstype" "${start_mb}MiB" "$end_str" 2>&1)
-                ret=$?
-            else
-                output=$(parted -s "$loopdev" mkpart primary "${start_mb}MiB" "$end_str" 2>&1)
-                ret=$?
-            fi
-
-            if [ $ret -eq 0 ]; then
-                return 0
-            fi
-
-            last_output="$output"
-
-            # If the error looks like 'outside device' / 'not enough space' try shrinking the end
-            if echo "$output" | grep -Ei 'outside|out of range|not enough space|beyond|außerhalb|außer' >/dev/null 2>&1; then
-                print_warning "parted failed to create partition with end ${end_str} - retrying with ${attempt_end-1}MiB: $output"
-                attempt_end=$((attempt_end - 1))
-
-                if [ "$attempt_end" -le "$start_mb" ]; then
-                    print_error "Cannot allocate partition: insufficient space after retries"
-                    echo "$last_output"
-                    cleanup
-                    exit 1
-                fi
-
-                continue
-            else
-                print_error "parted failed creating partition: $output"
-                cleanup
-                exit 1
-            fi
-        done
-
-        print_error "Failed to create partition after ${max_attempts} retries: $last_output"
-        cleanup
-        exit 1
-    }
 
     for i in $(seq 0 $((count - 1))); do
         fs="${fs_arr[$i]}"
@@ -1208,60 +1129,56 @@ create_partitions() {
             continue
         fi
 
-        # determine end for this partition
+        # Calculate end position
         if [ "$i" -eq "$last_mkpart_idx" ]; then
-            # Make sure last mkpart ends before any trailing unallocated space and within usable area
+            # Last partition: use remaining space minus trailing unallocated
             end_mb=$((usable_mb - trailing_unalloc_sum))
-            if [ "$start_mb" -ge "$end_mb" ]; then
-                print_error "Not enough space to create partition $((i+1)): needed ${size_mb}MB, available $((end_mb - start_mb))MB"
-                cleanup
-                exit 1
-            fi
-            end="${end_mb}MiB"
-            numeric_end_mb=$end_mb
         else
-            end_val=$((start_mb + size_mb))
-            # ensure we don't exceed usable area (should be caught by earlier checks)
-            if [ "$end_val" -gt "$usable_mb" ]; then
-                print_error "Partition $((i+1)) would exceed usable disk area (end ${end_val}MB > usable ${usable_mb}MB)"
-                cleanup
-                exit 1
-            fi
-            end="${end_val}MiB"
-            numeric_end_mb=$end_val
+            # Not last partition: use specified size
+            end_mb=$((start_mb + size_mb))
         fi
 
-        print_info "Creating partition $part_num: ${start_mb}MiB -> $end"
+        # Sanity check
+        if [ "$start_mb" -ge "$end_mb" ]; then
+            print_error "Invalid partition $((i+1)): start ${start_mb}MB >= end ${end_mb}MB"
+            cleanup
+            exit 1
+        fi
 
+        print_info "Creating partition $part_num: ${start_mb}MiB -> ${end_mb}MiB"
+
+        # Use parted with optimal alignment
+        # The -a optimal flag lets parted choose the best alignment
+        local parted_fs_type=""
         case $fs in
-            swap)
-                try_mkpart "$LOOP_DEVICE" "$start_mb" "$numeric_end_mb" linux-swap
-                ;;
-            fat12|fat16|vfat)
-                try_mkpart "$LOOP_DEVICE" "$start_mb" "$numeric_end_mb" fat32
-                ;;
-            ntfs)
-                try_mkpart "$LOOP_DEVICE" "$start_mb" "$numeric_end_mb" ntfs
-                ;;
-            ext2|ext3|ext4)
-                try_mkpart "$LOOP_DEVICE" "$start_mb" "$numeric_end_mb" ext4
-                ;;
-            xfs)
-                try_mkpart "$LOOP_DEVICE" "$start_mb" "$numeric_end_mb" xfs
-                ;;
-            hfsplus)
-                try_mkpart "$LOOP_DEVICE" "$start_mb" "$numeric_end_mb" hfs+
-                ;;
-            *)
-                try_mkpart "$LOOP_DEVICE" "$start_mb" "$numeric_end_mb" ""
-                ;;
+            swap) parted_fs_type="linux-swap" ;;
+            fat12|fat16|vfat) parted_fs_type="fat32" ;;
+            ntfs) parted_fs_type="ntfs" ;;
+            ext2|ext3|ext4) parted_fs_type="ext4" ;;
+            xfs) parted_fs_type="xfs" ;;
+            hfsplus) parted_fs_type="hfs+" ;;
         esac
 
-        # advance start pointer for next partition (skip this for the explicitly-ended last mkpart)
+        # Create partition
+        if [ -n "$parted_fs_type" ]; then
+            if ! parted -s -a optimal "$LOOP_DEVICE" mkpart primary "$parted_fs_type" "${start_mb}MiB" "${end_mb}MiB"; then
+                print_error "Failed to create partition $part_num"
+                cleanup
+                exit 1
+            fi
+        else
+            if ! parted -s -a optimal "$LOOP_DEVICE" mkpart primary "${start_mb}MiB" "${end_mb}MiB"; then
+                print_error "Failed to create partition $part_num"
+                cleanup
+                exit 1
+            fi
+        fi
+
+        # Move to next partition start
         if [ "$i" -ne "$last_mkpart_idx" ]; then
             start_mb=$((start_mb + size_mb))
         else
-            start_mb=$((end_mb))
+            start_mb=$end_mb
         fi
 
         part_num=$((part_num + 1))
@@ -1312,7 +1229,6 @@ format_partitions() {
                     cleanup
                     exit 1
                 fi
-                echo "$output" | sed -n '1,50p'
                 ;;
             fat16)
                 output=$(mkfs.fat -F 16 -n "$label" "$PARTITION" 2>&1)
@@ -1323,7 +1239,6 @@ format_partitions() {
                     cleanup
                     exit 1
                 fi
-                echo "$output" | sed -n '1,50p'
                 ;;
             vfat)
                 output=$(mkfs.vfat -F 32 -n "$label" "$PARTITION" 2>&1)
@@ -1334,7 +1249,6 @@ format_partitions() {
                     cleanup
                     exit 1
                 fi
-                echo "$output" | sed -n '1,50p'
                 ;;
             ntfs)
                 output=$(mkfs.ntfs -f -L "$label" "$PARTITION" 2>&1)
@@ -1345,7 +1259,6 @@ format_partitions() {
                     cleanup
                     exit 1
                 fi
-                echo "$output" | grep -E "^(Cluster|Creating|mkntfs completed)" || true
                 ;;
             exfat)
                 output=$(mkfs.exfat -n "$label" "$PARTITION" 2>&1)
@@ -1356,7 +1269,6 @@ format_partitions() {
                     cleanup
                     exit 1
                 fi
-                echo "$output" | sed -n '1,50p'
                 ;;
             ext2|ext3|ext4)
                 output=$(mkfs."$fs" -L "$label" "$PARTITION" 2>&1)
@@ -1367,7 +1279,6 @@ format_partitions() {
                     cleanup
                     exit 1
                 fi
-                echo "$output" | grep -E "^(Creating|Writing|mke2fs)" || true
                 ;;
             xfs)
                 output=$(mkfs.xfs -f -L "$label" "$PARTITION" 2>&1)
@@ -1378,7 +1289,6 @@ format_partitions() {
                     cleanup
                     exit 1
                 fi
-                echo "$output" | sed -n '1,50p'
                 ;;
             hfsplus)
                 output=$(mkfs.hfsplus -v "$label" "$PARTITION" 2>&1)
@@ -1389,11 +1299,6 @@ format_partitions() {
                     cleanup
                     exit 1
                 fi
-                echo "$output" | sed -n '1,50p'
-                ;;
-            apfs)
-                print_warning "APFS formatting on Linux is not well supported"
-                print_info "Skipping format for APFS partition"
                 ;;
             swap)
                 output=$(mkswap -L "SWAP${actual_part_num}" "$PARTITION" 2>&1)
@@ -1404,7 +1309,6 @@ format_partitions() {
                     cleanup
                     exit 1
                 fi
-                echo "$output" | grep -E "^Setting up" || true
                 ;;
             *)
                 print_warning "Unknown filesystem type: $fs - skipping format"
@@ -1470,8 +1374,8 @@ mount_filesystems() {
         for config in "${PARTITION_CONFIGS[@]}"; do
             IFS='|' read -r fs size label <<< "$config"
             
-            # Skip swap, apfs, and unallocated filesystems
-            if [ "$fs" = "swap" ] || [ "$fs" = "apfs" ] || [ "$fs" = "unallocated" ]; then
+            # Skip swap and unallocated filesystems
+            if [ "$fs" = "swap" ] || [ "$fs" = "unallocated" ]; then
                 print_info "Skipping mount for $fs partition $part_num"
                 part_num=$((part_num + 1))
                 continue
@@ -1649,6 +1553,10 @@ main() {
         if [ "$modify" = "y" ]; then
             get_partition_configs
         fi
+    else
+        get_partition_scheme
+        get_partition_count
+        get_partition_configs
     fi
     
     # Show final summary and confirm
