@@ -4,7 +4,8 @@
 # Creates disk images with various filesystems for forensic analysis practice
 # Now with improved UX, sanity checks, and extended filesystem support
 
-#set -e  # Exit on error
+set -e
+set -o pipefail
 
 # Color codes for output
 RED='\033[0;31m'
@@ -14,6 +15,9 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
 NC='\033[0m' # No Color
+
+# Initialize mount points array to avoid bad-substitution errors when cleanup runs
+MOUNT_POINTS=()
 
 # Function to print colored messages
 print_info() {
@@ -100,70 +104,50 @@ check_filesystem_tools() {
     echo ""
     echo "Checking filesystem tool availability..."
     echo ""
-    
-    # FAT12/16
-    if command -v mkfs.fat >/dev/null 2>&1 || command -v mkfs.vfat >/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} FAT12/16 (mkfs.fat available)"
-    else
-        echo -e "  ${YELLOW}✗${NC} FAT12/16 (install: sudo apt-get install dosfstools)"
-    fi
-    
-    # FAT32
-    if command -v mkfs.vfat >/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} FAT32    (mkfs.vfat available)"
-    else
-        echo -e "  ${YELLOW}✗${NC} FAT32    (install: sudo apt-get install dosfstools)"
-    fi
-    
-    # exFAT
-    if command -v mkfs.exfat >/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} exFAT    (mkfs.exfat available)"
-    else
-        echo -e "  ${YELLOW}✗${NC} exFAT    (install: sudo apt-get install exfatprogs)"
-    fi
-    
-    # NTFS
-    if command -v mkfs.ntfs >/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} NTFS     (mkfs.ntfs available)"
-    else
-        echo -e "  ${YELLOW}✗${NC} NTFS     (install: sudo apt-get install ntfs-3g)"
-    fi
-    
-    # ext2/3/4
-    if command -v mkfs.ext4 >/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} ext2/3/4 (mkfs.ext4 available)"
-    else
-        echo -e "  ${YELLOW}✗${NC} ext2/3/4 (install: sudo apt-get install e2fsprogs)"
-    fi
-    
-    # XFS
-    if command -v mkfs.xfs >/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} XFS      (mkfs.xfs available)"
-    else
-        echo -e "  ${YELLOW}✗${NC} XFS      (install: sudo apt-get install xfsprogs)"
-    fi
-    
-    # HFS+
-    if command -v mkfs.hfsplus >/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} HFS+     (mkfs.hfsplus available)"
-    else
-        echo -e "  ${YELLOW}✗${NC} HFS+     (install: sudo apt-get install hfsprogs)"
-    fi
-    
-    # APFS
-    if command -v mkfs.apfs >/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} APFS     (mkfs.apfs available)"
-    else
-        echo -e "  ${YELLOW}✗${NC} APFS     (limited Linux support - not recommended)"
-    fi
-    
-    # swap
-    if command -v mkswap >/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} swap     (mkswap available)"
-    else
-        echo -e "  ${YELLOW}✗${NC} swap     (should be in util-linux)"
-    fi
-    
+
+    # Each entry: Display Name | space-separated candidate commands | install hint / note
+    local checks=(
+        "FAT12/16|mkfs.fat mkfs.msdos mkfs.vfat|sudo apt-get install dosfstools"
+        "FAT32|mkfs.vfat mkfs.fat|sudo apt-get install dosfstools"
+        "exFAT|mkfs.exfat mkfs.exfatprogs mkfs.exfat-utils|sudo apt-get install exfatprogs or exfat-utils"
+        "NTFS|mkfs.ntfs mkntfs|sudo apt-get install ntfs-3g"
+        "ext2|mkfs.ext2 mke2fs|sudo apt-get install e2fsprogs"
+        "ext3|mkfs.ext3 mke2fs|sudo apt-get install e2fsprogs"
+        "ext4|mkfs.ext4 mke2fs|sudo apt-get install e2fsprogs"
+        "XFS|mkfs.xfs|sudo apt-get install xfsprogs"
+        "HFS+|mkfs.hfsplus newfs_hfs|sudo apt-get install hfsprogs"
+        "APFS|mkfs.apfs apfs-fuse|limited support — creation typically requires macOS or specialized tools"
+        "swap|mkswap|should be present in util-linux"
+        "Unallocated|:|no mkfs required"
+    )
+
+    local entry name cmds hint cmd found
+
+    for entry in "${checks[@]}"; do
+        # Split the packed entry into three fields
+        IFS='|' read -r name cmds hint <<< "$entry"
+        found=0
+
+        # If cmds is a single colon, treat it as 'no tool required'
+        if [ "$cmds" = ":" ]; then
+            printf "  %b %s (%s)\n" "${GREEN}✓${NC}" "$name" "$hint"
+            continue
+        fi
+
+        # Check each candidate command for the filesystem
+        for cmd in $cmds; do
+            if command -v "$cmd" >/dev/null 2>&1; then
+                printf "  %b %-12s (%s available)\n" "${GREEN}✓${NC}" "$name" "$cmd"
+                found=1
+                break
+            fi
+        done
+
+        if [ "$found" -eq 0 ]; then
+            printf "  %b %-12s (install: %s)\n" "${YELLOW}✗${NC}" "$name" "$hint"
+        fi
+    done
+
     echo ""
 }
 
@@ -295,17 +279,31 @@ get_filename() {
     echo ""
     read -p "Enter output filename (default: forensic_disk.dd): " FILENAME
     FILENAME=${FILENAME:-forensic_disk.dd}
-    
-    # Validate filename
-    if [[ "$FILENAME" =~ [^a-zA-Z0-9._-] ]]; then
-        print_warning "Filename contains special characters. This may cause issues."
-        read -p "Continue with this filename? (y/n): " continue
-        if [ "$continue" != "y" ]; then
-            get_filename
-            return
-        fi
+
+    # Strip whitespace
+    FILENAME=$(echo "$FILENAME" | xargs)
+
+    # Reject invalid characters (allow only safe chars)
+    if [[ ! "$FILENAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        print_error "Filename can only contain: letters, numbers, dots, underscores, hyphens"
+        get_filename
+        return
     fi
-    
+
+    # Prevent path traversal and absolute paths
+    if [[ "$FILENAME" == *".."* ]] || [[ "$FILENAME" == /* ]]; then
+        print_error "Path traversal not allowed"
+        get_filename
+        return
+    fi
+
+    # Ensure .dd extension
+    if [[ "$FILENAME" != *.dd ]]; then
+        FILENAME="${FILENAME}.dd"
+        print_info "Added .dd extension: $FILENAME"
+    fi
+
+    # Check if file exists
     if [ -f "$FILENAME" ]; then
         print_warning "File already exists: $FILENAME"
         read -p "Overwrite? (y/n): " OVERWRITE
@@ -329,7 +327,7 @@ get_disk_size() {
     echo "  6) Custom size"
     echo ""
     read -p "Select disk size [1-6]: " SIZE_CHOICE
-    
+
     case $SIZE_CHOICE in
         1) DISK_SIZE_MB=100 ;;
         2) DISK_SIZE_MB=500 ;;
@@ -337,20 +335,39 @@ get_disk_size() {
         4) DISK_SIZE_MB=5120 ;;
         5) DISK_SIZE_MB=10240 ;;
         6)
-            read -p "Enter size in MB: " DISK_SIZE_MB
-            if ! [[ "$DISK_SIZE_MB" =~ ^[0-9]+$ ]] || [ "$DISK_SIZE_MB" -lt 10 ]; then
-                print_error "Invalid size. Must be at least 10 MB"
-                get_disk_size
-                return
-            fi
-            if [ "$DISK_SIZE_MB" -gt 102400 ]; then
-                print_warning "Very large disk size (>100GB). This may take a while."
-                read -p "Continue? (y/n): " continue
-                if [ "$continue" != "y" ]; then
-                    get_disk_size
-                    return
+            while true; do
+                read -p "Enter size in MB: " DISK_SIZE_MB
+
+                # Validate input
+                if ! [[ "$DISK_SIZE_MB" =~ ^[0-9]+$ ]]; then
+                    print_error "Invalid input. Enter a number."
+                    continue
                 fi
-            fi
+
+                if [ "$DISK_SIZE_MB" -lt 10 ]; then
+                    print_error "Minimum size is 10 MB"
+                    continue
+                fi
+
+                # Maximum 10TB (reasonable limit)
+                if [ "$DISK_SIZE_MB" -gt 10485760 ]; then
+                    print_error "Maximum size is 10TB (10485760 MB)"
+                    continue
+                fi
+
+                # Check available disk space
+                local available_kb
+                available_kb=$(df --output=avail -k "." | tail -1)
+                local required_kb=$((DISK_SIZE_MB * 1024))
+
+                if [ "$available_kb" -lt "$required_kb" ]; then
+                    local available_mb=$((available_kb / 1024))
+                    print_error "Not enough disk space. Available: ${available_mb}MB"
+                    continue
+                fi
+
+                break
+            done
             ;;
         *)
             print_error "Invalid choice"
@@ -358,7 +375,7 @@ get_disk_size() {
             return
             ;;
     esac
-    
+
     print_info "Selected disk size: ${DISK_SIZE_MB} MB ($(echo "scale=2; $DISK_SIZE_MB/1024" | bc) GB)"
 }
 
@@ -558,7 +575,7 @@ get_preset_or_custom() {
 # Apply preset configuration
 apply_preset() {
     PARTITION_CONFIGS=()
-    
+
     case $PRESET_CHOICE in
         1)  # Windows 11/10
             PARTITION_CONFIGS+=("vfat|260|EFI")
@@ -601,12 +618,19 @@ apply_preset() {
             ;;
         9)  # Linux with /home
             local root_size=$((DISK_SIZE_MB / 4))
-            if [ "$root_size" -lt 5120 ]; then
-                root_size=5120  # Minimum 5GB for root
+            local min_root=5120
+
+            if [ "$root_size" -lt "$min_root" ]; then
+                # Check if disk is large enough for minimum
+                if [ "$DISK_SIZE_MB" -lt "$((min_root + 1024))" ]; then
+                    # Disk too small, use proportional sizing
+                    root_size=$((DISK_SIZE_MB * 2 / 3))
+                    print_warning "Disk too small for 5GB root, using ${root_size}MB"
+                else
+                    root_size=$min_root
+                fi
             fi
-            if [ "$root_size" -gt $((DISK_SIZE_MB - 1024)) ]; then
-                root_size=$((DISK_SIZE_MB / 2))  # If not enough space, use half
-            fi
+
             PARTITION_CONFIGS+=("vfat|260|EFI")
             PARTITION_CONFIGS+=("ext4|${root_size}|rootfs")
             PARTITION_CONFIGS+=("ext4|remaining|home")
@@ -934,40 +958,69 @@ get_partition_configs() {
 # Create the disk image
 create_disk_image() {
     print_info "Creating disk image file: $FILENAME (${DISK_SIZE_MB} MB) using $INIT_METHOD..."
-    
+
     case $INIT_METHOD in
         fallocate)
             if command -v fallocate >/dev/null 2>&1; then
-                fallocate -l ${DISK_SIZE_MB}M "$FILENAME"
+                if ! fallocate -l ${DISK_SIZE_MB}M "$FILENAME"; then
+                    print_error "Failed to create disk image with fallocate"
+                    exit 1
+                fi
             else
                 print_warning "fallocate not available, falling back to /dev/zero"
-                dd if=/dev/zero of="$FILENAME" bs=1M count=$DISK_SIZE_MB status=progress 2>&1 | grep -v "records"
+                if ! dd if=/dev/zero of="$FILENAME" bs=1M count="$DISK_SIZE_MB" status=progress; then
+                    print_error "Failed to create disk image"
+                    exit 1
+                fi
             fi
             ;;
         zero)
-            dd if=/dev/zero of="$FILENAME" bs=1M count=$DISK_SIZE_MB status=progress 2>&1 | grep -v "records"
+            if ! dd if=/dev/zero of="$FILENAME" bs=1M count="$DISK_SIZE_MB" status=progress; then
+                print_error "Failed to create disk image"
+                exit 1
+            fi
             ;;
         random)
             print_warning "Using /dev/urandom - this will be SLOW!"
-            dd if=/dev/urandom of="$FILENAME" bs=1M count=$DISK_SIZE_MB status=progress 2>&1 | grep -v "records"
+            if ! dd if=/dev/urandom of="$FILENAME" bs=1M count="$DISK_SIZE_MB" status=progress; then
+                print_error "Failed to create disk image"
+                exit 1
+            fi
             ;;
     esac
-    
-    print_success "Disk image created with $INIT_METHOD"
+
+    # Verify file was created with correct size
+    if [ ! -f "$FILENAME" ]; then
+        print_error "Disk image file was not created"
+        exit 1
+    fi
+
+    local actual_size
+    actual_size=$(stat -c%s "$FILENAME" 2>/dev/null || stat -f%z "$FILENAME" 2>/dev/null || echo 0)
+    local expected_size=$((DISK_SIZE_MB * 1024 * 1024))
+
+    if [ "$actual_size" -ne "$expected_size" ]; then
+        print_error "Disk image size mismatch (expected ${expected_size} bytes, got ${actual_size})"
+        rm -f "$FILENAME"
+        exit 1
+    fi
+
+    print_success "Disk image created and verified"
 }
 
 # Setup loop device
 setup_loop_device() {
     print_info "Setting up loop device..."
-    LOOP_DEVICE=$(losetup -f)
-    
+
+    # Use atomic operation (find + attach in one command)
+    LOOP_DEVICE=$(losetup -f --show "$FILENAME" 2>/dev/null || true)
+
     if [ -z "$LOOP_DEVICE" ]; then
-        print_error "No free loop devices available"
+        print_error "Failed to create loop device"
         print_info "Try: sudo modprobe loop max_loop=16"
         exit 1
     fi
-    
-    losetup "$LOOP_DEVICE" "$FILENAME"
+
     print_success "Loop device created: $LOOP_DEVICE"
 }
 
@@ -1037,76 +1090,162 @@ create_partitions() {
 
 # Format the partitions
 format_partitions() {
-    local part_num=1
-    
+    local config_num=1
+    local actual_part_num=1
+
     for config in "${PARTITION_CONFIGS[@]}"; do
         IFS='|' read -r fs size label <<< "$config"
-        
-        # Skip unallocated space - no partition to format
+
         if [ "$fs" = "unallocated" ]; then
-            print_info "Skipping unallocated space (no partition to format)"
+            print_info "Skipping unallocated space in config $config_num"
+            config_num=$((config_num + 1))
             continue
         fi
-        
+
         # Determine partition device name
-        PARTITION="${LOOP_DEVICE}p${part_num}"
+        PARTITION="${LOOP_DEVICE}p${actual_part_num}"
         if [ ! -e "$PARTITION" ]; then
-            PARTITION="${LOOP_DEVICE}${part_num}"
+            PARTITION="${LOOP_DEVICE}${actual_part_num}"
         fi
-        
+
         if [ ! -e "$PARTITION" ]; then
-            print_error "Cannot find partition device for partition $part_num"
-            print_info "Expected: ${LOOP_DEVICE}p${part_num} or ${LOOP_DEVICE}${part_num}"
+            print_error "Cannot find partition device for config $config_num (expected ${LOOP_DEVICE}p${actual_part_num} or ${LOOP_DEVICE}${actual_part_num})"
             cleanup
             exit 1
         fi
-        
-        print_info "Formatting partition $part_num ($PARTITION) with $fs filesystem..."
-        
+
+        print_info "Formatting config #${config_num} -> partition ${actual_part_num} ($PARTITION) with $fs filesystem..."
+
         case $fs in
             fat12)
-                # FAT12 requires specific cluster size
-                mkfs.fat -F 12 -n "$label" "$PARTITION" 2>&1 | grep -v "^mkfs.fat"
+                output=$(mkfs.fat -F 12 -n "$label" "$PARTITION" 2>&1)
+                ret=$?
+                if [ $ret -ne 0 ]; then
+                    print_error "Failed to format partition ${actual_part_num} as FAT12"
+                    echo "$output"
+                    cleanup
+                    exit 1
+                fi
+                echo "$output" | sed -n '1,50p'
                 ;;
             fat16)
-                # FAT16
-                mkfs.fat -F 16 -n "$label" "$PARTITION" 2>&1 | grep -v "^mkfs.fat"
+                output=$(mkfs.fat -F 16 -n "$label" "$PARTITION" 2>&1)
+                ret=$?
+                if [ $ret -ne 0 ]; then
+                    print_error "Failed to format partition ${actual_part_num} as FAT16"
+                    echo "$output"
+                    cleanup
+                    exit 1
+                fi
+                echo "$output" | sed -n '1,50p'
                 ;;
             vfat)
-                # FAT32
-                mkfs.vfat -F 32 -n "$label" "$PARTITION" 2>&1 | grep -v "^mkfs.fat"
+                output=$(mkfs.vfat -F 32 -n "$label" "$PARTITION" 2>&1)
+                ret=$?
+                if [ $ret -ne 0 ]; then
+                    print_error "Failed to format partition ${actual_part_num} as FAT32"
+                    echo "$output"
+                    cleanup
+                    exit 1
+                fi
+                echo "$output" | sed -n '1,50p'
                 ;;
             ntfs)
-                mkfs.ntfs -f -L "$label" "$PARTITION" 2>&1 | grep -E "^(Cluster|Creating|mkntfs completed)"
+                output=$(mkfs.ntfs -f -L "$label" "$PARTITION" 2>&1)
+                ret=$?
+                if [ $ret -ne 0 ]; then
+                    print_error "Failed to format partition ${actual_part_num} as NTFS"
+                    echo "$output"
+                    cleanup
+                    exit 1
+                fi
+                echo "$output" | grep -E "^(Cluster|Creating|mkntfs completed)" || true
                 ;;
             exfat)
-                mkfs.exfat -n "$label" "$PARTITION" 2>&1 | grep -v "^exfatprogs"
+                output=$(mkfs.exfat -n "$label" "$PARTITION" 2>&1)
+                ret=$?
+                if [ $ret -ne 0 ]; then
+                    print_error "Failed to format partition ${actual_part_num} as exFAT"
+                    echo "$output"
+                    cleanup
+                    exit 1
+                fi
+                echo "$output" | sed -n '1,50p'
                 ;;
             ext2|ext3|ext4)
-                mkfs."$fs" -L "$label" "$PARTITION" 2>&1 | grep -E "^(Creating|Writing|mke2fs)"
+                output=$(mkfs."$fs" -L "$label" "$PARTITION" 2>&1)
+                ret=$?
+                if [ $ret -ne 0 ]; then
+                    print_error "Failed to format partition ${actual_part_num} as $fs"
+                    echo "$output"
+                    cleanup
+                    exit 1
+                fi
+                echo "$output" | grep -E "^(Creating|Writing|mke2fs)" || true
                 ;;
             xfs)
-                mkfs.xfs -f -L "$label" "$PARTITION" 2>&1 | grep -v "^meta-data"
+                output=$(mkfs.xfs -f -L "$label" "$PARTITION" 2>&1)
+                ret=$?
+                if [ $ret -ne 0 ]; then
+                    print_error "Failed to format partition ${actual_part_num} as XFS"
+                    echo "$output"
+                    cleanup
+                    exit 1
+                fi
+                echo "$output" | sed -n '1,50p'
                 ;;
             hfsplus)
-                mkfs.hfsplus -v "$label" "$PARTITION" 2>&1
+                output=$(mkfs.hfsplus -v "$label" "$PARTITION" 2>&1)
+                ret=$?
+                if [ $ret -ne 0 ]; then
+                    print_error "Failed to format partition ${actual_part_num} as HFS+"
+                    echo "$output"
+                    cleanup
+                    exit 1
+                fi
+                echo "$output" | sed -n '1,50p'
                 ;;
             apfs)
                 print_warning "APFS formatting on Linux is not well supported"
                 print_info "Skipping format for APFS partition"
                 ;;
             swap)
-                mkswap -L "SWAP$part_num" "$PARTITION" 2>&1 | grep "^Setting up"
+                output=$(mkswap -L "SWAP${actual_part_num}" "$PARTITION" 2>&1)
+                ret=$?
+                if [ $ret -ne 0 ]; then
+                    print_error "Failed to set up swap on partition ${actual_part_num}"
+                    echo "$output"
+                    cleanup
+                    exit 1
+                fi
+                echo "$output" | grep -E "^Setting up" || true
+                ;;
+            *)
+                print_warning "Unknown filesystem type: $fs - skipping format"
                 ;;
         esac
-        
-        print_success "Partition $part_num formatted"
-        part_num=$((part_num + 1))
+
+        print_success "Partition ${actual_part_num} formatted (config ${config_num})"
+        actual_part_num=$((actual_part_num + 1))
+        config_num=$((config_num + 1))
     done
 }
 
 # Cleanup function
 cleanup() {
+    # Unmount any mounted filesystems
+    if [ "${#MOUNT_POINTS[@]}" -gt 0 ]; then
+        print_info "Unmounting filesystems..."
+        for mp in "${MOUNT_POINTS[@]}"; do
+            if mountpoint -q "$mp" 2>/dev/null; then
+                umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+                print_info "Unmounted $mp"
+            fi
+            rmdir "$mp" 2>/dev/null || true
+        done
+    fi
+
+    # Detach loop device
     if [ -n "$LOOP_DEVICE" ]; then
         print_info "Cleaning up loop device..."
         losetup -d "$LOOP_DEVICE" 2>/dev/null || true
@@ -1208,7 +1347,7 @@ show_summary() {
         config_num=$((config_num + 1))
     done
     
-    if [ ${#MOUNT_POINTS[@]} -gt 0 ]; then
+    if [ "${#MOUNT_POINTS[@]}" -gt 0 ]; then
         echo ""
         echo "Mount Points:"
         for mp in "${MOUNT_POINTS[@]}"; do
@@ -1239,7 +1378,7 @@ show_summary() {
     echo "  xxd -s 0x1BE -l 64 $FILENAME      # MBR partition table"
     echo ""
     echo "Clean up (when done):"
-    if [ ${#MOUNT_POINTS[@]} -gt 0 ]; then
+    if [ "${#MOUNT_POINTS[@]}" -gt 0 ]; then
         for mp in "${MOUNT_POINTS[@]}"; do
             echo "  sudo umount $mp"
         done

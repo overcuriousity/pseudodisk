@@ -39,9 +39,6 @@ sudo apt-get install exfat-fuse exfat-utils
 
 # For XFS support
 sudo apt-get install xfsprogs
-
-# For forensic analysis tools
-sudo apt-get install sleuthkit
 ```
 
 ## Preset Layouts
@@ -131,12 +128,18 @@ The script will:
 
 Checking filesystem tool availability...
 
-  ✓ NTFS    (mkfs.ntfs available)
+  ✓ FAT12/16 (mkfs.fat available)
   ✓ FAT32   (mkfs.vfat available)
   ✓ exFAT   (mkfs.exfat available)
-  ✓ ext2/3/4 (mkfs.ext4 available)
+  ✓ NTFS    (mkfs.ntfs available)
+  ✓ ext2    (mke2fs/mkfs.ext2 available)
+  ✓ ext3    (mke2fs/mkfs.ext3 available)
+  ✓ ext4    (mkfs.ext4 available)
   ✓ XFS     (mkfs.xfs available)
+  ✓ HFS+    (mkfs.hfsplus available)
+  ✓ APFS    (limited Linux support; creation typically requires macOS)
   ✓ swap    (mkswap available)
+  ✓ Unallocated (no mkfs required)
 
 Enter output filename (default: forensic_disk.dd): win11.dd
 
@@ -420,9 +423,9 @@ sudo debugfs -R 'stat <inode>' /dev/loop0p1
    - Compare expected vs actual cluster usage
 
 8. **Partition Hiding**
-   - Create multiple partitions
-   - Modify partition table
-   - Practice recovering hidden partitions
+    - Create multiple partitions
+    - Modify partition table
+    - Practice recovering hidden partitions
 
 9. **Anti-Forensics Techniques**
    - Study timestamp manipulation
