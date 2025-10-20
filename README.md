@@ -5,6 +5,7 @@ A comprehensive toolkit for creating disk images with various filesystems for fo
 ## Features
 
 - **Multiple Filesystem Support**: NTFS, FAT32, exFAT, ext2/3/4, XFS, swap
+- **Preset Layouts**: Pre-configured layouts for Windows, Linux, and macOS systems
 - **Multi-Partition Support**: Create up to 4 partitions in a single disk image
 - **Partition Schemes**: GPT (modern) and MBR (legacy)
 - **Initialization Methods**: Choose between /dev/zero (fast), /dev/urandom (realistic), or fallocate (sparse)
@@ -43,6 +44,34 @@ sudo apt-get install xfsprogs
 sudo apt-get install sleuthkit
 ```
 
+## Preset Layouts
+
+Choose from pre-configured layouts that simulate real operating systems:
+
+**Windows Presets:**
+- Windows 11/10 (GPT, EFI + NTFS + Recovery)
+- Windows Vista/7/8 (MBR, System Reserved + NTFS)
+- Windows 2000/XP (MBR, Single NTFS)
+- Windows 98/ME (MBR, Single FAT32)
+- Windows 95 (MBR, Single FAT16)
+- Windows 3.1 (MBR, Single FAT16)
+- MS-DOS (MBR, Single FAT12)
+
+**Linux Presets:**
+- Modern Linux (GPT, EFI + Root + Swap)
+- Linux with /home (GPT, EFI + Root + Home)
+- Classic Linux (MBR, Boot + Root + Swap)
+- Minimal Linux (MBR, Single ext4)
+
+**macOS Presets:**
+- Modern macOS (GPT, EFI + APFS)
+- Legacy macOS (GPT, Single HFS+)
+
+**Custom Layout:**
+- Full manual configuration with 1-4 partitions
+
+All presets can be customized during setup or used as-is.
+
 ## Initialization Methods
 
 The script offers three methods for creating the disk image file:
@@ -65,16 +94,6 @@ The script offers three methods for creating the disk image file:
    - Good for quick testing
    - May not be suitable for all forensic scenarios
 
-## Multi-Partition Support
-
-Create complex disk layouts with up to 4 partitions:
-
-- Each partition can have a different filesystem
-- Mix operating system types (Windows NTFS + Linux ext4)
-- Include swap partitions for realistic Linux setups
-- The last partition automatically uses remaining space
-- Perfect for practicing partition table analysis
-
 ## Usage
 
 ### Creating a Disk Image
@@ -89,21 +108,25 @@ The script will:
 1. Check filesystem tool availability
 2. Interactively prompt you for:
    - **Filename**: Output file name (default: forensic_disk.dd)
-   - **Size**: Choose from presets (100MB, 500MB, 1GB, 5GB) or custom
+   - **Size**: Choose from presets (100MB, 500MB, 1GB, 5GB, 10GB) or custom
    - **Initialization Method**: /dev/zero, /dev/urandom, or fallocate
-   - **Partition Scheme**: GPT or MBR
-   - **Partition Count**: 1-4 partitions
-   - **Per-Partition Configuration**:
-     - Filesystem type (NTFS, FAT32, exFAT, ext2/3/4, XFS, swap)
-     - Size in MB (last partition uses remaining space)
-     - Volume label (except for swap)
+   - **Layout**: Select a preset or custom configuration
+   - **For Presets**: Option to use as-is or customize
+   - **For Custom**:
+     - Partition Scheme: GPT or MBR
+     - Partition Count: 1-4 partitions
+     - Per-Partition Configuration:
+       - Filesystem type (NTFS, FAT32, exFAT, ext2/3/4, XFS, swap, etc.)
+       - Size in MB (last partition uses remaining space)
+       - Volume label (except for swap)
    - **Mount**: Option to mount filesystems immediately after creation
 
-### Example Session
+### Example Session (with Preset)
 
 ```
 ==========================================
   Forensic Disk Image Creator
+  Enhanced Edition v2.1
 ==========================================
 
 Checking filesystem tool availability...
@@ -115,71 +138,60 @@ Checking filesystem tool availability...
   ✓ XFS     (mkfs.xfs available)
   ✓ swap    (mkswap available)
 
-Enter output filename (default: forensic_disk.dd): ntfsdisk.dd
+Enter output filename (default: forensic_disk.dd): win11.dd
 
 Disk Size Options:
   1) 100 MB  (small, quick testing)
   2) 500 MB  (medium)
   3) 1 GB    (standard)
   4) 5 GB    (large)
-  5) Custom size
+  5) 10 GB   (very large)
+  6) Custom size
 
-Select disk size [1-5]: 2
+Select disk size [1-6]: 3
 
 Initialization Method:
   1) /dev/zero   (Fast, zeros - forensically predictable)
-  2) /dev/random (Slow, random data - more realistic)
+  2) /dev/urandom (Slow, random data - more realistic)
   3) fallocate   (Fastest, sparse file)
 
 Select initialization method [1-3]: 1
 
-Partition Scheme:
-  1) GPT (GUID Partition Table) - Modern, Windows 10/11 default
-  2) MBR (Master Boot Record) - Legacy, compatible with older systems
-
-Select partition scheme [1-2]: 1
-
-How many partitions? (1-4): 2
-
 ==========================================
-  Partition 1 Configuration
+  Disk Layout
 ==========================================
 
-Filesystem Type:
-  1) NTFS    (Windows default)
-  2) FAT32   (Universal compatibility)
-  3) exFAT   (Modern, large file support)
-  4) ext4    (Linux default)
-  5) ext3    (Older Linux)
-  6) ext2    (Legacy Linux, no journaling)
-  7) XFS     (High-performance Linux)
-  8) swap    (Linux swap space)
+Layout Presets:
 
-Select filesystem for partition 1 [1-8]: 1
+  Windows Presets:
+    1)  Windows 11/10 (GPT, EFI + NTFS + Recovery)
+    2)  Windows Vista/7/8 (MBR, System Reserved + NTFS)
+    3)  Windows 2000/XP (MBR, Single NTFS)
+    4)  Windows 98/ME (MBR, Single FAT32)
+    5)  Windows 95 (MBR, Single FAT16)
+    6)  Windows 3.1 (MBR, Single FAT16)
+    7)  MS-DOS (MBR, Single FAT12)
 
-Size for partition 1 in MB: 400
+  Linux Presets:
+    8)  Modern Linux (GPT, EFI + Root + Swap)
+    9)  Linux with /home (GPT, EFI + Root + Home)
+    10) Classic Linux (MBR, Boot + Root + Swap)
+    11) Minimal Linux (MBR, Single ext4)
 
-Volume label for partition 1 (default: PART1): EVIDENCE
+  macOS Presets:
+    12) Modern macOS (GPT, EFI + APFS)
+    13) Legacy macOS (GPT, Single HFS+)
 
-==========================================
-  Partition 2 Configuration
-==========================================
+  Custom:
+    14) Custom layout (manual configuration)
 
-Filesystem Type:
-  1) NTFS    (Windows default)
-  2) FAT32   (Universal compatibility)
-  3) exFAT   (Modern, large file support)
-  4) ext4    (Linux default)
-  5) ext3    (Older Linux)
-  6) ext2    (Legacy Linux, no journaling)
-  7) XFS     (High-performance Linux)
-  8) swap    (Linux swap space)
+Select layout [1-14]: 1
 
-Select filesystem for partition 2 [1-8]: 4
+[INFO] Preset: Windows 11/10 (GPT)
+[NOTE] EFI System Partition (260MB) + Main Windows (auto) + Recovery (500MB)
 
-[INFO] Partition 2 will use remaining space
-
-Volume label for partition 2 (default: PART2): DATA
+Customize this preset? (y/n, default: n): n
+[INFO] Using preset configuration as-is
 ```
 
 ### Cleaning Up
@@ -203,45 +215,45 @@ sudo ./cleanup.sh
 #### View raw disk structure
 ```bash
 # Using hexdump
-hexdump -C ntfsdisk.dd | less
+hexdump -C win11.dd | less
 
 # Using xxd
-xxd ntfsdisk.dd | less
+xxd win11.dd | less
 
 # View first 512 bytes (boot sector)
-xxd -l 512 ntfsdisk.dd
+xxd -l 512 win11.dd
 
 # View specific offset (e.g., partition table at 0x1BE for MBR)
-xxd -s 0x1BE -l 64 ntfsdisk.dd
+xxd -s 0x1BE -l 64 win11.dd
 ```
 
 #### GUI Hex Editors
 ```bash
 # Install Bless (GTK hex editor)
 sudo apt-get install bless
-bless ntfsdisk.dd
+bless win11.dd
 
 # Or install GHex
 sudo apt-get install ghex
-ghex ntfsdisk.dd
+ghex win11.dd
 
 # Or install wxHexEditor (advanced)
 sudo apt-get install wxhexeditor
-wxhexeditor ntfsdisk.dd
+wxhexeditor win11.dd
 ```
 
 ### Partition Analysis
 
 ```bash
 # View partition table
-sudo parted ntfsdisk.dd print
+sudo parted win11.dd print
 
 # Or using fdisk
-sudo fdisk -l ntfsdisk.dd
+sudo fdisk -l win11.dd
 
 # For GPT, use gdisk
 sudo apt-get install gdisk
-sudo gdisk -l ntfsdisk.dd
+sudo gdisk -l win11.dd
 ```
 
 ### Using The Sleuth Kit (TSK)
@@ -251,22 +263,22 @@ sudo gdisk -l ntfsdisk.dd
 sudo apt-get install sleuthkit
 
 # Display partition layout
-mmls ntfsdisk.dd
+mmls win11.dd
 
 # Show filesystem details (offset from mmls output)
-fsstat -o 2048 ntfsdisk.dd
+fsstat -o 2048 win11.dd
 
 # List files in filesystem
-fls -o 2048 -r ntfsdisk.dd
+fls -o 2048 -r win11.dd
 
 # Display file content by inode
-icat -o 2048 ntfsdisk.dd [inode_number]
+icat -o 2048 win11.dd [inode_number]
 
 # Show deleted files
-fls -o 2048 -rd ntfsdisk.dd
+fls -o 2048 -rd win11.dd
 
 # Timeline analysis
-fls -o 2048 -m / -r ntfsdisk.dd > timeline.bodyfile
+fls -o 2048 -m / -r win11.dd > timeline.bodyfile
 mactime -b timeline.bodyfile
 ```
 
@@ -276,13 +288,13 @@ If you need more control over the loop device:
 
 ```bash
 # Attach image to loop device
-sudo losetup -f ntfsdisk.dd
+sudo losetup -f win11.dd
 
 # List all loop devices
 sudo losetup -l
 
 # Find out which loop device is attached
-sudo losetup -j ntfsdisk.dd
+sudo losetup -j win11.dd
 
 # Mount the partition
 sudo mkdir -p /mnt/forensic
@@ -309,7 +321,7 @@ sudo ntfscluster -f /dev/loop0p1
 
 # Recover deleted files
 sudo apt-get install testdisk
-sudo testdisk ntfsdisk.dd
+sudo testdisk win11.dd
 ```
 
 #### FAT32 Analysis
@@ -319,7 +331,7 @@ sudo testdisk ntfsdisk.dd
 sudo fsck.vfat -n /dev/loop0p1
 
 # Or using sleuthkit
-fsstat -o 2048 ntfsdisk.dd
+fsstat -o 2048 win11.dd
 ```
 
 #### ext4 Analysis
@@ -370,12 +382,12 @@ sudo debugfs -R 'stat <inode>' /dev/loop0p1
 ### Beginner Level
 
 1. **Identify Partition Scheme**
-   - Create disks with GPT and MBR
+   - Create disks with different Windows versions (MBR vs GPT)
    - Compare the first 512 bytes
    - Identify the signature differences
 
 2. **Find the Filesystem Type**
-   - Create disks with different filesystems
+   - Create disks with different filesystems using presets
    - Examine boot sector signatures
    - Identify OEM strings
 
@@ -417,6 +429,11 @@ sudo debugfs -R 'stat <inode>' /dev/loop0p1
    - Examine wiping patterns
    - Analyze file system corruption
 
+10. **Cross-OS Analysis**
+    - Create Windows and Linux dual-boot layout
+    - Analyze different partition schemes
+    - Practice identifying filesystem boundaries
+
 ## Troubleshooting
 
 ### Loop device not found
@@ -431,7 +448,7 @@ ls -la /dev/loop*
 ### Permission denied
 ```bash
 # Always use sudo for these operations
-sudo ./create_forensic_disk.sh
+sudo ./pseudodisk.sh
 ```
 
 ### Partition not showing up
@@ -441,7 +458,7 @@ sudo partprobe /dev/loopX
 
 # Or detach and re-attach
 sudo losetup -d /dev/loopX
-sudo losetup -f ntfsdisk.dd
+sudo losetup -f win11.dd
 ```
 
 ### Cannot unmount - device busy

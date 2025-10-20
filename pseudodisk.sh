@@ -4,7 +4,7 @@
 # Creates disk images with various filesystems for forensic analysis practice
 # Now with improved UX, sanity checks, and extended filesystem support
 
-set -e  # Exit on error
+#set -e  # Exit on error
 
 # Color codes for output
 RED='\033[0;31m'
@@ -285,7 +285,7 @@ show_banner() {
     echo ""
     echo "=========================================="
     echo "  Forensic Disk Image Creator"
-    echo "  Enhanced Edition v2.0"
+    echo "  Enhanced Edition v2.1"
     echo "=========================================="
     echo ""
 }
@@ -396,6 +396,239 @@ get_init_method() {
     print_info "Selected initialization method: $INIT_METHOD"
 }
 
+# Get preset or custom layout
+get_preset_or_custom() {
+    USE_PRESET=false
+    
+    echo ""
+    echo "=========================================="
+    echo "  Disk Layout"
+    echo "=========================================="
+    echo ""
+    echo "Layout Presets:"
+    echo ""
+    echo "  Windows Presets:"
+    echo "    1)  Windows 11/10 (GPT, EFI + NTFS + Recovery)"
+    echo "    2)  Windows Vista/7/8 (MBR, System Reserved + NTFS)"
+    echo "    3)  Windows 2000/XP (MBR, Single NTFS)"
+    echo "    4)  Windows 98/ME (MBR, Single FAT32)"
+    echo "    5)  Windows 95 (MBR, Single FAT16)"
+    echo "    6)  Windows 3.1 (MBR, Single FAT16)"
+    echo "    7)  MS-DOS (MBR, Single FAT12)"
+    echo ""
+    echo "  Linux Presets:"
+    echo "    8)  Modern Linux (GPT, EFI + Root + Swap)"
+    echo "    9)  Linux with /home (GPT, EFI + Root + Home)"
+    echo "    10) Classic Linux (MBR, Boot + Root + Swap)"
+    echo "    11) Minimal Linux (MBR, Single ext4)"
+    echo ""
+    echo "  macOS Presets:"
+    echo "    12) Modern macOS (GPT, EFI + APFS)"
+    echo "    13) Legacy macOS (GPT, Single HFS+)"
+    echo ""
+    echo "  Custom:"
+    echo "    14) Custom layout (manual configuration)"
+    echo ""
+    read -p "Select layout [1-14]: " PRESET_CHOICE
+    
+    case $PRESET_CHOICE in
+        1)  # Windows 11/10
+            USE_PRESET=true
+            PARTITION_SCHEME="gpt"
+            PARTITION_COUNT=3
+            print_info "Preset: Windows 11/10 (GPT)"
+            print_note "EFI System Partition (260MB) + Main Windows (auto) + Recovery (500MB)"
+            ;;
+        2)  # Windows Vista/7/8
+            USE_PRESET=true
+            PARTITION_SCHEME="msdos"
+            PARTITION_COUNT=2
+            print_info "Preset: Windows Vista/7/8 (MBR)"
+            print_note "System Reserved (100MB) + Main Windows (auto)"
+            ;;
+        3)  # Windows 2000/XP
+            USE_PRESET=true
+            PARTITION_SCHEME="msdos"
+            PARTITION_COUNT=1
+            print_info "Preset: Windows 2000/XP (MBR)"
+            print_note "Single NTFS partition"
+            ;;
+        4)  # Windows 98/ME
+            USE_PRESET=true
+            PARTITION_SCHEME="msdos"
+            PARTITION_COUNT=1
+            print_info "Preset: Windows 98/ME (MBR)"
+            print_note "Single FAT32 partition"
+            ;;
+        5)  # Windows 95
+            USE_PRESET=true
+            PARTITION_SCHEME="msdos"
+            PARTITION_COUNT=1
+            print_info "Preset: Windows 95 (MBR)"
+            print_note "Single FAT16 partition"
+            ;;
+        6)  # Windows 3.1
+            USE_PRESET=true
+            PARTITION_SCHEME="msdos"
+            PARTITION_COUNT=1
+            print_info "Preset: Windows 3.1 (MBR)"
+            print_note "Single FAT16 partition"
+            ;;
+        7)  # MS-DOS
+            USE_PRESET=true
+            PARTITION_SCHEME="msdos"
+            PARTITION_COUNT=1
+            print_info "Preset: MS-DOS (MBR)"
+            print_note "Single FAT12 partition (max 16MB)"
+            if [ "$DISK_SIZE_MB" -gt 16 ]; then
+                print_warning "MS-DOS typically uses FAT12 which is limited to 16MB"
+                print_info "Consider reducing disk size or the partition will use FAT16"
+            fi
+            ;;
+        8)  # Modern Linux
+            USE_PRESET=true
+            PARTITION_SCHEME="gpt"
+            PARTITION_COUNT=3
+            print_info "Preset: Modern Linux (GPT)"
+            print_note "EFI (260MB) + Root ext4 (auto) + Swap (2GB)"
+            ;;
+        9)  # Linux with /home
+            USE_PRESET=true
+            PARTITION_SCHEME="gpt"
+            PARTITION_COUNT=3
+            print_info "Preset: Linux with separate /home (GPT)"
+            print_note "EFI (260MB) + Root ext4 (auto) + Home ext4 (auto)"
+            ;;
+        10) # Classic Linux
+            USE_PRESET=true
+            PARTITION_SCHEME="msdos"
+            PARTITION_COUNT=3
+            print_info "Preset: Classic Linux (MBR)"
+            print_note "Boot ext4 (500MB) + Root ext4 (auto) + Swap (2GB)"
+            ;;
+        11) # Minimal Linux
+            USE_PRESET=true
+            PARTITION_SCHEME="msdos"
+            PARTITION_COUNT=1
+            print_info "Preset: Minimal Linux (MBR)"
+            print_note "Single ext4 partition"
+            ;;
+        12) # Modern macOS
+            USE_PRESET=true
+            PARTITION_SCHEME="gpt"
+            PARTITION_COUNT=2
+            print_info "Preset: Modern macOS (GPT)"
+            print_note "EFI (200MB) + APFS (auto)"
+            print_warning "APFS support on Linux is very limited"
+            ;;
+        13) # Legacy macOS
+            USE_PRESET=true
+            PARTITION_SCHEME="gpt"
+            PARTITION_COUNT=1
+            print_info "Preset: Legacy macOS (GPT)"
+            print_note "Single HFS+ partition"
+            print_warning "HFS+ support on Linux is limited"
+            ;;
+        14) # Custom
+            USE_PRESET=false
+            print_info "Custom layout selected"
+            ;;
+        *)
+            print_error "Invalid choice"
+            get_preset_or_custom
+            return
+            ;;
+    esac
+    
+    if [ "$USE_PRESET" = true ]; then
+        echo ""
+        read -p "Customize this preset? (y/n, default: n): " CUSTOMIZE
+        CUSTOMIZE=${CUSTOMIZE:-n}
+        
+        if [ "$CUSTOMIZE" = "y" ]; then
+            ALLOW_PRESET_CUSTOMIZATION=true
+            print_info "You can modify the preset configuration in the next steps"
+        else
+            ALLOW_PRESET_CUSTOMIZATION=false
+            print_info "Using preset configuration as-is"
+        fi
+    fi
+}
+
+# Apply preset configuration
+apply_preset() {
+    PARTITION_CONFIGS=()
+    
+    case $PRESET_CHOICE in
+        1)  # Windows 11/10
+            PARTITION_CONFIGS+=("vfat|260|EFI")
+            PARTITION_CONFIGS+=("ntfs|remaining|Windows")
+            PARTITION_CONFIGS+=("ntfs|500|Recovery")
+            ;;
+        2)  # Windows Vista/7/8
+            PARTITION_CONFIGS+=("ntfs|100|System")
+            PARTITION_CONFIGS+=("ntfs|remaining|Windows")
+            ;;
+        3)  # Windows 2000/XP
+            PARTITION_CONFIGS+=("ntfs|remaining|Windows")
+            ;;
+        4)  # Windows 98/ME
+            PARTITION_CONFIGS+=("vfat|remaining|WIN98")
+            ;;
+        5)  # Windows 95
+            if [ "$DISK_SIZE_MB" -le 2048 ]; then
+                PARTITION_CONFIGS+=("fat16|remaining|WIN95")
+            else
+                PARTITION_CONFIGS+=("vfat|remaining|WIN95")
+                print_warning "Disk >2GB, using FAT32 instead of FAT16"
+            fi
+            ;;
+        6)  # Windows 3.1
+            PARTITION_CONFIGS+=("fat16|remaining|WIN31")
+            ;;
+        7)  # MS-DOS
+            if [ "$DISK_SIZE_MB" -le 16 ]; then
+                PARTITION_CONFIGS+=("fat12|remaining|MSDOS")
+            else
+                PARTITION_CONFIGS+=("fat16|remaining|MSDOS")
+                print_warning "Disk >16MB, using FAT16 instead of FAT12"
+            fi
+            ;;
+        8)  # Modern Linux
+            PARTITION_CONFIGS+=("vfat|260|EFI")
+            PARTITION_CONFIGS+=("ext4|remaining|rootfs")
+            PARTITION_CONFIGS+=("swap|2048|")
+            ;;
+        9)  # Linux with /home
+            local root_size=$((DISK_SIZE_MB / 4))
+            if [ "$root_size" -lt 5120 ]; then
+                root_size=5120  # Minimum 5GB for root
+            fi
+            if [ "$root_size" -gt $((DISK_SIZE_MB - 1024)) ]; then
+                root_size=$((DISK_SIZE_MB / 2))  # If not enough space, use half
+            fi
+            PARTITION_CONFIGS+=("vfat|260|EFI")
+            PARTITION_CONFIGS+=("ext4|${root_size}|rootfs")
+            PARTITION_CONFIGS+=("ext4|remaining|home")
+            ;;
+        10) # Classic Linux
+            PARTITION_CONFIGS+=("ext4|500|boot")
+            PARTITION_CONFIGS+=("ext4|remaining|rootfs")
+            PARTITION_CONFIGS+=("swap|2048|")
+            ;;
+        11) # Minimal Linux
+            PARTITION_CONFIGS+=("ext4|remaining|rootfs")
+            ;;
+        12) # Modern macOS
+            PARTITION_CONFIGS+=("vfat|200|EFI")
+            PARTITION_CONFIGS+=("apfs|remaining|MacintoshHD")
+            ;;
+        13) # Legacy macOS
+            PARTITION_CONFIGS+=("hfsplus|remaining|MacintoshHD")
+            ;;
+    esac
+}
+
 # Get partition scheme
 get_partition_scheme() {
     echo ""
@@ -405,9 +638,9 @@ get_partition_scheme() {
     echo ""
     print_tip "GPT is recommended for modern systems and disks >2TB"
     echo ""
-    read -p "Select partition scheme [1-2]: " PARTITION_CHOICE
+    read -p "Select partition scheme [1-2]: " PARTITION_CHOICE_SCHEME
     
-    case $PARTITION_CHOICE in
+    case $PARTITION_CHOICE_SCHEME in
         1) PARTITION_SCHEME="gpt" ;;
         2) 
             PARTITION_SCHEME="msdos"
@@ -1030,9 +1263,36 @@ main() {
     get_filename
     get_disk_size
     get_init_method
-    get_partition_scheme
-    get_partition_count
-    get_partition_configs
+    get_preset_or_custom
+    
+    if [ "$USE_PRESET" = true ]; then
+        apply_preset
+        
+        if [ "$ALLOW_PRESET_CUSTOMIZATION" = true ]; then
+            # Show current config and allow modifications
+            echo ""
+            echo "Current preset configuration:"
+            for i in $(seq 1 ${#PARTITION_CONFIGS[@]}); do
+                config="${PARTITION_CONFIGS[$((i-1))]}"
+                IFS='|' read -r fs size label <<< "$config"
+                if [ "$fs" = "swap" ]; then
+                    echo "  [$i] $fs (${size}MB)"
+                else
+                    echo "  [$i] $fs (${size}MB) - '$label'"
+                fi
+            done
+            echo ""
+            read -p "Modify partition configurations? (y/n): " modify
+            if [ "$modify" = "y" ]; then
+                get_partition_configs
+            fi
+        fi
+    else
+        # Custom layout
+        get_partition_scheme
+        get_partition_count
+        get_partition_configs
+    fi
     
     # Show final summary and confirm
     echo ""
@@ -1043,9 +1303,9 @@ main() {
     echo "Size:              ${DISK_SIZE_MB} MB ($(echo "scale=2; $DISK_SIZE_MB/1024" | bc) GB)"
     echo "Init Method:       $INIT_METHOD"
     echo "Partition Scheme:  $PARTITION_SCHEME"
-    echo "Partitions:        $PARTITION_COUNT"
+    echo "Partitions:        ${#PARTITION_CONFIGS[@]}"
     
-    for i in $(seq 1 $PARTITION_COUNT); do
+    for i in $(seq 1 ${#PARTITION_CONFIGS[@]}); do
         config="${PARTITION_CONFIGS[$((i-1))]}"
         IFS='|' read -r fs size label <<< "$config"
         if [ "$fs" = "swap" ]; then
