@@ -19,6 +19,12 @@ NC='\033[0m' # No Color
 # Initialize mount points array to avoid bad-substitution errors when cleanup runs
 MOUNT_POINTS=()
 
+# Flag controlling whether mounts and loop device should be preserved when the
+# script exits. When true the cleanup() function will NOT unmount partitions or
+# detach the loop device. This is set interactively after mounting if the user
+# requests it.
+PRESERVE_MOUNTS=false
+
 # Function to print colored messages
 print_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -556,20 +562,6 @@ get_preset_or_custom() {
             return
             ;;
     esac
-    
-    if [ "$USE_PRESET" = true ]; then
-        echo ""
-        read -p "Customize this preset? (y/n, default: n): " CUSTOMIZE
-        CUSTOMIZE=${CUSTOMIZE:-n}
-        
-        if [ "$CUSTOMIZE" = "y" ]; then
-            ALLOW_PRESET_CUSTOMIZATION=true
-            print_info "You can modify the preset configuration in the next steps"
-        else
-            ALLOW_PRESET_CUSTOMIZATION=false
-            print_info "Using preset configuration as-is"
-        fi
-    fi
 }
 
 # Apply preset configuration
@@ -1427,6 +1419,26 @@ format_partitions() {
 
 # Cleanup function
 cleanup() {
+    # If the user requested preservation, do not unmount or detach the loop device.
+    if [ "$PRESERVE_MOUNTS" = "true" ]; then
+        if [ "${#MOUNT_POINTS[@]}" -gt 0 ]; then
+            print_info "Preserving ${#MOUNT_POINTS[@]} mounted filesystem(s) as requested. They will NOT be unmounted by the script."
+            for mp in "${MOUNT_POINTS[@]}"; do
+                if mountpoint -q "$mp" 2>/dev/null; then
+                    print_info "Left mounted: $mp"
+                fi
+            done
+        fi
+
+        if [ -n "$LOOP_DEVICE" ]; then
+            print_info "Loop device left attached: $LOOP_DEVICE"
+            print_info "To clean up manually run: sudo umount <mountpoint> && sudo losetup -d $LOOP_DEVICE"
+        fi
+
+        # Skip the normal cleanup actions
+        return
+    fi
+
     # Unmount any mounted filesystems
     if [ "${#MOUNT_POINTS[@]}" -gt 0 ]; then
         print_info "Unmounting filesystems..."
@@ -1499,6 +1511,15 @@ mount_filesystems() {
             
             part_num=$((part_num + 1))
         done
+
+        # When the user mounts partitions, preserve them by default so the
+        # environment remains available for interactive analysis without an
+        # extra confirmation prompt.
+        if [ "${#MOUNT_POINTS[@]}" -gt 0 ]; then
+            PRESERVE_MOUNTS=true
+            print_info "Mounted filesystems will be preserved after script exit (default when mounting)."
+            print_tip "When finished, unmount and detach manually: sudo umount <mountpoint> && sudo losetup -d $LOOP_DEVICE"
+        fi
     fi
 }
 
@@ -1572,12 +1593,21 @@ show_summary() {
     echo "  xxd -s 0x1BE -l 64 $FILENAME      # MBR partition table"
     echo ""
     echo "Clean up (when done):"
+
+    if [ "$PRESERVE_MOUNTS" = "true" ]; then
+        echo "  [NOTE] The script has preserved mounted filesystems and the loop device. To clean up manually run:"
+    fi
+
     if [ "${#MOUNT_POINTS[@]}" -gt 0 ]; then
         for mp in "${MOUNT_POINTS[@]}"; do
             echo "  sudo umount $mp"
         done
     fi
-    echo "  sudo losetup -d $LOOP_DEVICE"
+
+    if [ -n "$LOOP_DEVICE" ]; then
+        echo "  sudo losetup -d $LOOP_DEVICE"
+    fi
+
     echo ""
     
     print_tip "Remember to unmount filesystems and detach loop device when finished!"
@@ -1600,31 +1630,25 @@ main() {
     
     if [ "$USE_PRESET" = true ]; then
         apply_preset
-        
-        if [ "$ALLOW_PRESET_CUSTOMIZATION" = true ]; then
-            # Show current config and allow modifications
-            echo ""
-            echo "Current preset configuration:"
-            for i in $(seq 1 ${#PARTITION_CONFIGS[@]}); do
-                config="${PARTITION_CONFIGS[$((i-1))]}"
-                IFS='|' read -r fs size label <<< "$config"
-                if [ "$fs" = "swap" ]; then
-                    echo "  [$i] $fs (${size}MB)"
-                else
-                    echo "  [$i] $fs (${size}MB) - '$label'"
-                fi
-            done
-            echo ""
-            read -p "Modify partition configurations? (y/n): " modify
-            if [ "$modify" = "y" ]; then
-                get_partition_configs
+
+        # Show the applied preset and offer a single modify prompt (reduces redundant dialogs)
+        echo ""
+        echo "Current preset configuration:"
+        for i in $(seq 1 ${#PARTITION_CONFIGS[@]}); do
+            config="${PARTITION_CONFIGS[$((i-1))]}"
+            IFS='|' read -r fs size label <<< "$config"
+            if [ "$fs" = "swap" ]; then
+                echo "  [$i] $fs (${size}MB)"
+            else
+                echo "  [$i] $fs (${size}MB) - '$label'"
             fi
+        done
+        echo ""
+        read -p "Modify partition configurations? (y/n, default: n): " modify
+        modify=${modify:-n}
+        if [ "$modify" = "y" ]; then
+            get_partition_configs
         fi
-    else
-        # Custom layout
-        get_partition_scheme
-        get_partition_count
-        get_partition_configs
     fi
     
     # Show final summary and confirm
