@@ -1,9 +1,10 @@
 # pseudodisk
 
-A comprehensive toolkit for creating disk images with various filesystems for forensic analysis practice and education.
+A comprehensive toolkit for creating disk images with various filesystems and RAID arrays for forensic analysis practice and education.
 
 ## Features
 
+### Disk Image Creator (`pseudodisk.sh`)
 - **Multiple Filesystem Support**: NTFS, FAT32, exFAT, ext2/3/4, XFS, HFS+, swap
 - **Preset Layouts**: Pre-configured layouts for Windows, Linux, and macOS systems
 - **Multi-Partition Support**: Create up to 4 partitions in a single disk image
@@ -13,6 +14,15 @@ A comprehensive toolkit for creating disk images with various filesystems for fo
 - **Automatic Loop Device Management**: Handles mounting and cleanup
 - **Filesystem Availability Check**: Verifies required tools before operation
 - **Forensic-Ready**: Pre-configured for hex editor and forensic tool analysis
+
+### Universal RAID Creator (`raid_creator.sh`)
+- **Three Implementation Modes**: mdadm (production), manual (educational), hybrid (both)
+- **Complete RAID Support**: RAID 0, 1, 4, 5, 6, and 10
+- **Advanced Configuration**: Custom stripe directions, algorithms, and parity layouts
+- **Minimal Dependencies**: Works with or without mdadm
+- **Educational Value**: Shows internal RAID mechanics
+- **Forensic Practice**: Creates realistic RAID arrays for analysis
+- **Comprehensive Documentation**: Extensive guides included
 
 ## Prerequisites
 
@@ -211,6 +221,31 @@ sudo ./cleanup.sh
 # Type 'all' when prompted
 ```
 
+## Creating RAID Arrays
+
+### Universal RAID Creator
+
+The universal RAID creator combines production-quality mdadm arrays with educational manual implementations:
+
+```bash
+sudo ./raid_creator.sh
+```
+
+**Three Modes:**
+1. **mdadm (Production)** - Real RAID with metadata, mountable immediately
+2. **Manual (Educational)** - Raw striping showing internal mechanics
+3. **Hybrid** - Manual layout + mdadm metadata for comprehensive learning
+
+**Supported RAID Levels:** 0, 1, 4, 5, 6, 10
+
+**Advanced Options:**
+- Custom stripe directions (forward, backward, inside-out, outside-in)
+- Stripe algorithms (standard, delayed, interleaved, random)
+- Multiple parity layouts
+- Configurable chunk sizes
+- Hot spare support (mdadm mode)
+
+
 ## Forensic Analysis Guide
 
 ### Basic Hex Analysis
@@ -228,6 +263,23 @@ xxd -l 512 win11.dd
 
 # View specific offset (e.g., partition table at 0x1BE for MBR)
 xxd -s 0x1BE -l 64 win11.dd
+```
+
+### RAID Array Analysis
+
+```bash
+# View stripe patterns across disks
+for i in {0..3}; do
+    echo "=== Disk $i ==="
+    dd if=raid_disk_${i}.dd bs=64k count=1 2>/dev/null | xxd | head -5
+done
+
+# Examine RAID metadata (if present)
+sudo mdadm --examine raid_disk_0.dd
+
+# Reassemble and mount
+sudo mdadm --assemble --scan
+sudo mount /dev/md0 /mnt/raid
 ```
 
 #### GUI Hex Editors

@@ -250,7 +250,8 @@ auto_cleanup() {
     done <<< "$devices"
 
     echo ""
-    read -p "Clean up all $count device(s)? (yes/no): " confirm
+    read -p "Clean up all $count device(s)? (yes/no, default: no): " confirm
+    confirm=${confirm:-no}
 
     if [ "$confirm" != "yes" ]; then
         print_info "Cancelled"
@@ -350,7 +351,8 @@ interactive_cleanup() {
     echo "  [q] Quit"
     echo ""
 
-    read -p "Enter selection: " selection
+    read -p "Enter selection (default: q): " selection
+    selection=${selection:-q}
 
     if [ "$selection" = "q" ]; then
         print_info "Cancelled"
@@ -404,7 +406,8 @@ main() {
     echo "  3) Enter filename manually"
     echo "  4) Quit"
     echo ""
-    read -p "Select option [1-4]: " option
+    read -p "Select option [1-4, default: 4]: " option
+    option=${option:-4}
     
     echo ""
     

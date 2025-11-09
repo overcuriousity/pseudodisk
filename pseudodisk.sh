@@ -227,7 +227,8 @@ validate_fs_size() {
     
     if [ -n "$max" ] && [ "$size" -gt "$max" ]; then
         print_warning "Partition size ${size}MB exceeds recommended maximum for $fs (${max}MB)"
-        read -p "Continue anyway? (y/n): " continue
+        read -p "Continue anyway? (y/n, default: n): " continue
+        continue=${continue:-n}
         if [ "$continue" != "y" ]; then
             return 1
         fi
@@ -309,7 +310,8 @@ get_filename() {
     # Check if file exists
     if [ -f "$FILENAME" ]; then
         print_warning "File already exists: $FILENAME"
-        read -p "Overwrite? (y/n): " OVERWRITE
+        read -p "Overwrite? (y/n, default: n): " OVERWRITE
+        OVERWRITE=${OVERWRITE:-n}
         if [ "$OVERWRITE" != "y" ]; then
             print_info "Please choose a different filename"
             get_filename
@@ -329,7 +331,8 @@ get_disk_size() {
     echo "  5) 10 GB    (very large)"
     echo "  6) Custom size"
     echo ""
-    read -p "Select disk size [1-6]: " SIZE_CHOICE
+    read -p "Select disk size [1-6, default: 3]: " SIZE_CHOICE
+    SIZE_CHOICE=${SIZE_CHOICE:-3}
 
     case $SIZE_CHOICE in
         1) DISK_SIZE_MB=100 ;;
@@ -392,7 +395,8 @@ get_init_method() {
     echo ""
     print_tip "For forensic practice, /dev/zero (option 1) is recommended"
     echo ""
-    read -p "Select initialization method [1-3]: " INIT_CHOICE
+    read -p "Select initialization method [1-3, default: 1]: " INIT_CHOICE
+    INIT_CHOICE=${INIT_CHOICE:-1}
     
     case $INIT_CHOICE in
         1) INIT_METHOD="zero" ;;
@@ -448,7 +452,8 @@ get_preset_or_custom() {
     echo "  Custom:"
     echo "    13) Custom layout (manual configuration)"
     echo ""
-    read -p "Select layout [1-13]: " PRESET_CHOICE
+    read -p "Select layout [1-13, default: 1]: " PRESET_CHOICE
+    PRESET_CHOICE=${PRESET_CHOICE:-1}
     
     case $PRESET_CHOICE in
         1)  # Windows 11/10
@@ -639,7 +644,8 @@ get_partition_scheme() {
     echo ""
     print_tip "GPT is recommended for modern systems and disks >2TB"
     echo ""
-    read -p "Select partition scheme [1-2]: " PARTITION_CHOICE_SCHEME
+    read -p "Select partition scheme [1-2, default: 1]: " PARTITION_CHOICE_SCHEME
+    PARTITION_CHOICE_SCHEME=${PARTITION_CHOICE_SCHEME:-1}
     
     case $PARTITION_CHOICE_SCHEME in
         1) PARTITION_SCHEME="gpt" ;;
@@ -665,7 +671,8 @@ get_partition_scheme() {
 # Get number of partitions
 get_partition_count() {
     echo ""
-    read -p "How many partitions? (1-4): " PARTITION_COUNT
+    read -p "How many partitions? (1-4, default: 1): " PARTITION_COUNT
+    PARTITION_COUNT=${PARTITION_COUNT:-1}
     
     if ! [[ "$PARTITION_COUNT" =~ ^[1-4]$ ]]; then
         print_error "Invalid number. Must be between 1 and 4"
@@ -712,7 +719,8 @@ get_partition_configs() {
         echo "  11) swap    (Linux swap space)"
         echo "  12) unallocated (Empty space - for forensic practice)"
         echo ""
-        read -p "Select filesystem for partition $i [1-12]: " FS_CHOICE
+        read -p "Select filesystem for partition $i [1-12, default: 8]: " FS_CHOICE
+        FS_CHOICE=${FS_CHOICE:-8}
         
         case $FS_CHOICE in
             1) 
@@ -1365,7 +1373,8 @@ cleanup() {
 # Mount filesystems
 mount_filesystems() {
     echo ""
-    read -p "Do you want to mount the filesystem(s) now? (y/n): " MOUNT_NOW
+    read -p "Do you want to mount the filesystem(s) now? (y/n, default: n): " MOUNT_NOW
+    MOUNT_NOW=${MOUNT_NOW:-n}
     
     if [ "$MOUNT_NOW" = "y" ]; then
         local part_num=1
@@ -1583,7 +1592,8 @@ main() {
     done
     
     echo ""
-    read -p "Proceed with creation? (y/n): " CONFIRM
+    read -p "Proceed with creation? (y/n, default: y): " CONFIRM
+    CONFIRM=${CONFIRM:-y}
     
     if [ "$CONFIRM" != "y" ]; then
         print_info "Operation cancelled"
@@ -1598,6 +1608,50 @@ main() {
     mount_filesystems
     
     show_summary
+    
+    # Ask if user wants to create a RAID array from the created image
+    ask_create_raid
+}
+
+# Ask if user wants to create RAID array from the created image
+ask_create_raid() {
+    echo ""
+    echo "=========================================="
+    echo "  RAID Array Creation"
+    echo "=========================================="
+    echo ""
+    read -p "Create a RAID array from this image? (y/n, default: n): " create_raid
+    create_raid=${create_raid:-n}
+    
+    if [ "$create_raid" = "y" ]; then
+        print_info "Preparing to create RAID array..."
+        
+        # Check if raid_creator.sh exists
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        RAID_CREATOR="$SCRIPT_DIR/raid_creator.sh"
+        
+        if [ ! -f "$RAID_CREATOR" ]; then
+            print_error "raid_creator.sh not found in $SCRIPT_DIR"
+            print_info "Please ensure raid_creator.sh is in the same directory"
+            return 1
+        fi
+        
+        if [ ! -x "$RAID_CREATOR" ]; then
+            print_warning "raid_creator.sh is not executable, attempting to make it executable..."
+            chmod +x "$RAID_CREATOR" || {
+                print_error "Failed to make raid_creator.sh executable"
+                return 1
+            }
+        fi
+        
+        print_success "Launching RAID creator with image: $FILENAME"
+        echo ""
+        
+        # Execute raid_creator.sh with the created image as parameter
+        "$RAID_CREATOR" "$FILENAME"
+    else
+        print_info "Skipping RAID array creation"
+    fi
 }
 
 # Run main function
